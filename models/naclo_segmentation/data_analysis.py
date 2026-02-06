@@ -112,7 +112,8 @@ class TurbidityAnalyzer:
                 sample_count=len(seg_data),
                 correlation=corr,
                 r2=r2,
-                cv=cv
+                cv=cv,
+                segment=segment
             )
             
             results.append({
@@ -135,32 +136,40 @@ class TurbidityAnalyzer:
         sample_count: int, 
         correlation: float, 
         r2: float, 
-        cv: float
+        cv: float,
+        segment: str = ""
     ) -> str:
-        """Determine recommendation based on analysis."""
-        cfg = self.config
+        """Determine recommendation based on segment and analysis.
         
-        # 样本量检查
-        if sample_count < cfg.min_samples_data_driven:
-            if r2 > cfg.high_r2_threshold:
-                return "机理模型（样本少但线性关系明确）"
-            else:
-                return "烧杯实验 + 专家规则"
+        强制按浊度段区分推荐方法：
+        - 低浊(0-20): 机理模型（浊度低时投药量变化小）
+        - 中低/中浊(20-100): 数据驱动（样本量大，适合训练模型）
+        - 中高浊(100-200): 混合方法（过渡区域）
+        - 高浊(>200): 机理模型 + 安全约束（极端工况需专家规则）
+        """
+        # 样本不足时
+        if sample_count < 100:
+            return "烧杯实验 + 专家规则"
         
-        # 相关性和R²检查
-        if abs(correlation) > cfg.high_correlation_threshold and r2 > cfg.high_r2_threshold:
-            if cv < cfg.low_cv_threshold:
-                return "机理模型（关系明确且稳定）"
-            else:
-                return "数据驱动（关系明确但有波动）"
+        # 基于浊度段的强制推荐
+        if '低浊' in segment and '中' not in segment:
+            # 低浊(0-20): 机理模型
+            return "机理模型（低浊工况，投药规律简单）"
         
-        if r2 > cfg.high_r2_threshold:
-            return "数据驱动（线性关系较好）"
+        elif '中低' in segment or '中浊' in segment:
+            # 中低/中浊(20-100): 数据驱动
+            return "数据驱动（样本充足，适合机器学习）"
         
-        if cv < cfg.low_cv_threshold:
-            return "机理模型（投药稳定）"
+        elif '中高' in segment:
+            # 中高浊(100-200): 混合方法
+            return "混合方法（数据驱动 + 机理约束）"
         
-        return "数据驱动 + 机理约束（关系复杂）"
+        elif '高浊' in segment:
+            # 高浊(>200): 机理模型 + 安全约束
+            return "机理模型 + 安全约束（极端工况）"
+        
+        # 默认
+        return "数据驱动"
     
     # ==================== Visualization ====================
     
@@ -236,7 +245,7 @@ class TurbidityAnalyzer:
         df: pd.DataFrame, 
         save_path: Optional[str] = None
     ) -> None:
-        """Plot dose vs turbidity scatter with clipped axes."""
+        """Plot dose vs turbidity scatter with clipped axes and improved legend."""
         df = self.segment_data(df)
         
         # 计算裁剪范围（99%分位数）
@@ -249,25 +258,29 @@ class TurbidityAnalyzer:
             (df[self.config.dose_col] <= y_max)
         ]
         
-        fig, ax = plt.subplots(figsize=(12, 8))
+        fig, ax = plt.subplots(figsize=(14, 8))
         
-        # 分段着色
+        # 使用更鲜明的颜色
+        segment_colors = ['#2ecc71', '#3498db', '#f39c12', '#e74c3c', '#9b59b6']
         segments = self.config.segment_labels
-        colors = plt.cm.tab10(np.linspace(0, 1, len(segments)))
         
-        for seg, color in zip(segments, colors):
+        for seg, color in zip(segments, segment_colors):
             seg_data = df_clipped[df_clipped['segment'] == seg]
             if len(seg_data) > 0:
                 ax.scatter(
                     seg_data[self.config.turbidity_col],
                     seg_data[self.config.dose_col],
-                    alpha=0.3, s=10, label=f'{seg} ({len(seg_data):,})', color=color
+                    alpha=0.4, s=15, label=f'{seg} ({len(seg_data):,})', 
+                    color=color, edgecolors='none'
                 )
         
-        ax.set_xlabel('进水浊度 (NTU)')
-        ax.set_ylabel('投药量')
-        ax.set_title(f'投药量 vs 进水浊度（显示 99% 分位数以内）')
-        ax.legend(title='浊度段', loc='upper right', fontsize=9)
+        ax.set_xlabel('进水浊度 (NTU)', fontsize=11)
+        ax.set_ylabel('投药量', fontsize=11)
+        ax.set_title(f'投药量 vs 进水浊度（显示 99% 分位数以内）', fontsize=12)
+        
+        # 图例放在图外右侧，避免重叠
+        ax.legend(title='浊度段', bbox_to_anchor=(1.02, 1), loc='upper left',
+                 fontsize=10, frameon=True, fancybox=True, shadow=True)
         ax.set_xlim(0, x_max * 1.05)
         ax.set_ylim(0, y_max * 1.05)
         
@@ -361,8 +374,18 @@ class TurbidityAnalyzer:
             save_path=os.path.join(self.config.figures_dir, "segment_metrics.png")
         )
         
-        # 4. Save analysis results
-        print("[4/5] 保存分析结果...")
+        # 4. 多特征分析（如果有流量数据）
+        print("[4/5] 多特征分析...")
+        if 'flow_1' in df.columns:
+            self.plot_multifeature_analysis(
+                df,
+                save_path=os.path.join(self.config.figures_dir, "multifeature_analysis.png")
+            )
+        else:
+            print("  (跳过：未找到 flow_1 列)")
+        
+        # 5. Save analysis results
+        print("[5/5] 保存分析结果...")
         analysis_df.to_csv(
             os.path.join(self.config.output_dir, "segment_analysis.csv"),
             index=False
@@ -375,3 +398,66 @@ class TurbidityAnalyzer:
             'analysis_df': analysis_df,
             'figures_dir': self.config.figures_dir
         }
+    
+    def plot_multifeature_analysis(
+        self,
+        df: pd.DataFrame,
+        save_path: Optional[str] = None
+    ) -> None:
+        """Plot multi-feature analysis: turbidity, flow, and dose relationships."""
+        df = self.segment_data(df)
+        
+        # 裁剪到 99% 分位数
+        turb_max = df[self.config.turbidity_col].quantile(0.99)
+        dose_max = df[self.config.dose_col].quantile(0.99)
+        flow_max = df['flow_1'].quantile(0.99) if 'flow_1' in df.columns else 1
+        
+        df_clipped = df[
+            (df[self.config.turbidity_col] <= turb_max) & 
+            (df[self.config.dose_col] <= dose_max)
+        ]
+        if 'flow_1' in df.columns:
+            df_clipped = df_clipped[df_clipped['flow_1'] <= flow_max]
+        
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        
+        segment_colors = ['#2ecc71', '#3498db', '#f39c12', '#e74c3c', '#9b59b6']
+        segments = self.config.segment_labels
+        
+        # 1. 流量 vs 投药量
+        ax1 = axes[0]
+        for seg, color in zip(segments, segment_colors):
+            seg_data = df_clipped[df_clipped['segment'] == seg]
+            if len(seg_data) > 0 and 'flow_1' in seg_data.columns:
+                ax1.scatter(
+                    seg_data['flow_1'], seg_data[self.config.dose_col],
+                    alpha=0.3, s=10, label=seg, color=color
+                )
+        ax1.set_xlabel('流量', fontsize=11)
+        ax1.set_ylabel('投药量', fontsize=11)
+        ax1.set_title('投药量 vs 流量（分段着色）')
+        ax1.legend(title='浊度段', fontsize=8, loc='upper right')
+        
+        # 2. 浊度 × 流量 vs 投药量（交互特征）
+        ax2 = axes[1]
+        if 'flow_1' in df_clipped.columns:
+            df_clipped['turb_x_flow'] = df_clipped[self.config.turbidity_col] * df_clipped['flow_1']
+            interaction_max = df_clipped['turb_x_flow'].quantile(0.99)
+            df_clipped = df_clipped[df_clipped['turb_x_flow'] <= interaction_max]
+            
+            for seg, color in zip(segments, segment_colors):
+                seg_data = df_clipped[df_clipped['segment'] == seg]
+                if len(seg_data) > 0:
+                    ax2.scatter(
+                        seg_data['turb_x_flow'], seg_data[self.config.dose_col],
+                        alpha=0.3, s=10, label=seg, color=color
+                    )
+            ax2.set_xlabel('浊度 × 流量', fontsize=11)
+            ax2.set_ylabel('投药量', fontsize=11)
+            ax2.set_title('投药量 vs 浊度×流量（交互特征）')
+        
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"Saved: {save_path}")
+        plt.close()
