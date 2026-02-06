@@ -375,7 +375,7 @@ class TurbidityAnalyzer:
         )
         
         # 4. 多特征分析（如果有流量数据）
-        print("[4/5] 多特征分析...")
+        print("[4/6] 多特征分析...")
         if 'flow_1' in df.columns:
             self.plot_multifeature_analysis(
                 df,
@@ -384,8 +384,18 @@ class TurbidityAnalyzer:
         else:
             print("  (跳过：未找到 flow_1 列)")
         
-        # 5. Save analysis results
-        print("[5/5] 保存分析结果...")
+        # 5. 水温分析
+        print("[5/6] 水温分析...")
+        if 'temp_down' in df.columns or 'temp_shuimian' in df.columns:
+            self.plot_temperature_analysis(
+                df,
+                save_path=os.path.join(self.config.figures_dir, "temperature_analysis.png")
+            )
+        else:
+            print("  (跳过：未找到温度列)")
+        
+        # 6. Save analysis results
+        print("[6/6] 保存分析结果...")
         analysis_df.to_csv(
             os.path.join(self.config.output_dir, "segment_analysis.csv"),
             index=False
@@ -455,6 +465,64 @@ class TurbidityAnalyzer:
             ax2.set_xlabel('浊度 × 流量', fontsize=11)
             ax2.set_ylabel('投药量', fontsize=11)
             ax2.set_title('投药量 vs 浊度×流量（交互特征）')
+        
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"Saved: {save_path}")
+        plt.close()
+    
+    def plot_temperature_analysis(
+        self,
+        df: pd.DataFrame,
+        save_path: Optional[str] = None
+    ) -> None:
+        """Plot temperature vs dose analysis."""
+        df = self.segment_data(df)
+        
+        # 选择水温列
+        temp_cols = []
+        if 'temp_down' in df.columns:
+            temp_cols.append(('temp_down', '水下温度'))
+        if 'temp_shuimian' in df.columns:
+            temp_cols.append(('temp_shuimian', '水面温度'))
+        
+        if not temp_cols:
+            return
+        
+        # 裁剪到 99% 分位数
+        dose_max = df[self.config.dose_col].quantile(0.99)
+        df_clipped = df[df[self.config.dose_col] <= dose_max]
+        
+        fig, axes = plt.subplots(1, len(temp_cols), figsize=(7 * len(temp_cols), 6))
+        if len(temp_cols) == 1:
+            axes = [axes]
+        
+        segment_colors = ['#2ecc71', '#3498db', '#f39c12', '#e74c3c', '#9b59b6']
+        segments = self.config.segment_labels
+        
+        for ax, (temp_col, temp_name) in zip(axes, temp_cols):
+            # 裁剪温度
+            if temp_col in df_clipped.columns:
+                temp_max = df_clipped[temp_col].quantile(0.99)
+                temp_min = df_clipped[temp_col].quantile(0.01)
+                df_temp = df_clipped[
+                    (df_clipped[temp_col] >= temp_min) & 
+                    (df_clipped[temp_col] <= temp_max)
+                ]
+                
+                for seg, color in zip(segments, segment_colors):
+                    seg_data = df_temp[df_temp['segment'] == seg]
+                    if len(seg_data) > 0:
+                        ax.scatter(
+                            seg_data[temp_col], seg_data[self.config.dose_col],
+                            alpha=0.3, s=10, label=seg, color=color
+                        )
+                
+                ax.set_xlabel(f'{temp_name} (°C)', fontsize=11)
+                ax.set_ylabel('投药量', fontsize=11)
+                ax.set_title(f'投药量 vs {temp_name}（分段着色）')
+                ax.legend(title='浊度段', fontsize=8, loc='upper right')
         
         plt.tight_layout()
         if save_path:

@@ -116,7 +116,27 @@ def generate_markdown_report(overview: dict, analysis_df, figures_dir: str, outp
 
 ---
 
-## 6. 决策表格
+## 6. 多特征分析
+
+### 6.1 流量与投药量关系
+
+![多特征分析]({figures_rel}/multifeature_analysis.png)
+
+**分析：**
+- 左图：投药量 vs 流量，不同颜色表示不同浊度段
+- 右图：投药量 vs 浊度×流量（交互特征），探索组合效应
+
+### 6.2 水温与投药量关系
+
+![水温分析]({figures_rel}/temperature_analysis.png)
+
+**分析：**
+- 水温可能影响药剂反应速率
+- 低温时可能需要增加投药量
+
+---
+
+## 7. 决策表格
 
 根据分析结果，各段建议使用的建模方法：
 
@@ -132,7 +152,7 @@ def generate_markdown_report(overview: dict, analysis_df, figures_dir: str, outp
     report += f"""
 ---
 
-## 7. 决策逻辑说明
+## 8. 决策逻辑说明
 
 ### 什么时候用数据驱动？
 - 样本量充足（> 1000）
@@ -151,12 +171,12 @@ def generate_markdown_report(overview: dict, analysis_df, figures_dir: str, outp
 
 ---
 
-## 8. 后续建议
+## 9. 后续建议
 
-1. **数据驱动段**：使用机器学习模型（如 RandomForest、LightGBM）
-2. **机理模型段**：建立基于次氯酸钠投加公式的规则
-3. **混合段**：数据驱动 + 机理约束（上下限）
-4. **样本不足段**：补充烧杯实验数据，或采用保守的专家规则
+1. **低浊段（机理模型）**：建立基于浊度的简单线性投药公式
+2. **中低/中浊段（数据驱动）**：使用 RandomForest、LightGBM 等机器学习模型
+3. **中高浊段（混合方法）**：数据驱动 + 机理约束（设置上下限）
+4. **高浊段（机理+安全约束）**：使用专家规则，确保安全投药量
 """
     
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
