@@ -456,7 +456,6 @@ class TurbidityAnalyzer:
         ax1.set_xlabel('流量', fontsize=11)
         ax1.set_ylabel('投药量', fontsize=11)
         ax1.set_title('投药量 vs 流量（分段着色）')
-        ax1.legend(title='浊度段', fontsize=8, loc='upper right')
         
         # 2. 浊度 × 流量 vs 投药量（交互特征）
         ax2 = axes[1]
@@ -476,7 +475,13 @@ class TurbidityAnalyzer:
             ax2.set_ylabel('投药量', fontsize=11)
             ax2.set_title('投药量 vs 浊度×流量（交互特征）')
         
-        plt.tight_layout()
+        # 添加共享图例在图外右侧
+        handles, labels = ax1.get_legend_handles_labels()
+        fig.legend(handles, labels, title='浊度段', 
+                  bbox_to_anchor=(1.02, 0.5), loc='center left',
+                  fontsize=10, frameon=True, fancybox=True, shadow=True)
+        
+        plt.tight_layout(rect=[0, 0, 0.88, 1])  # 为图例留出空间
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
             print(f"Saved: {save_path}")

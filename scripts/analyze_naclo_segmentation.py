@@ -140,14 +140,33 @@ def generate_markdown_report(overview: dict, analysis_df, figures_dir: str, outp
 
 根据分析结果，各段建议使用的建模方法：
 
-| 浊度段 | 样本量 | 相关系数 | 线性R² | 变异系数 | 推荐方法 |
-|-------|-------|---------|-------|---------|---------|
+| 浊度段 | 样本量 | 相关系数 | 线性R² | 变异系数 | 推荐方法 | 理由 |
+|-------|-------|---------|-------|---------|---------|------|
 """
     for _, row in analysis_df.iterrows():
         corr = f"{row['correlation']:.3f}" if not pd.isna(row['correlation']) else "-"
         r2 = f"{row['r2_linear']:.3f}" if not pd.isna(row['r2_linear']) else "-"
         cv = f"{row['cv_dose']:.3f}" if not pd.isna(row['cv_dose']) else "-"
-        report += f"| {row['segment']} | {int(row['sample_count']):,} | {corr} | {r2} | {cv} | {row['recommendation']} |\n"
+        
+        # 生成理由
+        cv_val = row['cv_dose'] if not pd.isna(row['cv_dose']) else 1
+        r2_val = row['r2_linear'] if not pd.isna(row['r2_linear']) else 0
+        corr_val = abs(row['correlation']) if not pd.isna(row['correlation']) else 0
+        
+        if row['sample_count'] < 500:
+            reason = "样本量不足，需补充实验"
+        elif r2_val > 0.5:
+            reason = f"R²={r2_val:.2f}>0.5，线性关系明确"
+        elif corr_val > 0.3:
+            reason = f"相关系数={corr_val:.2f}>0.3，有一定相关性"
+        elif cv_val < 0.3:
+            reason = f"CV={cv_val:.2f}<0.3，投药稳定"
+        elif cv_val > 1.0:
+            reason = f"CV={cv_val:.2f}>1.0，波动非常大"
+        else:
+            reason = f"R²={r2_val:.2f}<0.5，相关系数低，关系复杂"
+        
+        report += f"| {row['segment']} | {int(row['sample_count']):,} | {corr} | {r2} | {cv} | {row['recommendation']} | {reason} |\n"
     
     report += f"""
 ---
