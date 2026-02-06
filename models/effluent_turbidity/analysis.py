@@ -101,31 +101,36 @@ class ModelAnalyzer:
         
         for row, pos in enumerate(positions[:n_examples]):
             end_pos = min(pos + window_size, n_total)
+            time_idx = index[pos:end_pos]
             
             # t+1 prediction
             ax1 = axes[row, 0]
-            ax1.plot(range(window_size), y_true[pos:end_pos, 0], 
+            ax1.plot(time_idx, y_true[pos:end_pos, 0], 
                     'b-', label='真实值', linewidth=1.5)
-            ax1.plot(range(window_size), y_pred[pos:end_pos, 0], 
+            ax1.plot(time_idx, y_pred[pos:end_pos, 0], 
                     'r--', label='预测值', linewidth=1.5, alpha=0.8)
             start_time = index[pos].strftime('%m-%d %H:%M')
-            ax1.set_title(f'示例{row+1}: t+1步预测 (起始: {start_time})')
-            ax1.set_xlabel('时间步')
+            end_time = index[end_pos-1].strftime('%m-%d %H:%M')
+            ax1.set_title(f'示例{row+1}: t+1步预测 ({start_time} ~ {end_time})')
+            ax1.set_xlabel('时间')
             ax1.set_ylabel('浊度')
             ax1.legend()
             ax1.grid(True, alpha=0.3)
+            # 旋转时间标签防止重叠
+            plt.setp(ax1.xaxis.get_majorticklabels(), rotation=30, ha='right')
             
             # t+6 prediction
             ax2 = axes[row, 1]
-            ax2.plot(range(window_size), y_true[pos:end_pos, 5], 
+            ax2.plot(time_idx, y_true[pos:end_pos, 5], 
                     'b-', label='真实值', linewidth=1.5)
-            ax2.plot(range(window_size), y_pred[pos:end_pos, 5], 
+            ax2.plot(time_idx, y_pred[pos:end_pos, 5], 
                     'r--', label='预测值', linewidth=1.5, alpha=0.8)
-            ax2.set_title(f'示例{row+1}: t+6步预测 (起始: {start_time})')
-            ax2.set_xlabel('时间步')
+            ax2.set_title(f'示例{row+1}: t+6步预测 ({start_time} ~ {end_time})')
+            ax2.set_xlabel('时间')
             ax2.set_ylabel('浊度')
             ax2.legend()
             ax2.grid(True, alpha=0.3)
+            plt.setp(ax2.xaxis.get_majorticklabels(), rotation=30, ha='right')
         
         plt.tight_layout()
         
