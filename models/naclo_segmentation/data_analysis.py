@@ -139,37 +139,47 @@ class TurbidityAnalyzer:
         cv: float,
         segment: str = ""
     ) -> str:
-        """Determine recommendation based on segment and analysis.
+        """基于数据指标推荐建模方法。
         
-        强制按浊度段区分推荐方法：
-        - 低浊(0-20): 机理模型（浊度低时投药量变化小）
-        - 中低/中浊(20-100): 数据驱动（样本量大，适合训练模型）
-        - 中高浊(100-200): 混合方法（过渡区域）
-        - 高浊(>200): 机理模型 + 安全约束（极端工况需专家规则）
+        决策逻辑：
+        1. 样本量不足 → 烧杯实验
+        2. 线性关系明确 (R² > 0.5) → 机理模型
+        3. 有相关性但非线性 → 数据驱动
+        4. 投药稳定 (CV < 0.3) → 固定规则
+        5. 关系复杂且波动大 → 数据驱动 + 约束
         """
-        # 样本不足时
-        if sample_count < 100:
-            return "烧杯实验 + 专家规则"
+        # 处理 NaN
+        if np.isnan(correlation):
+            correlation = 0
+        if np.isnan(r2):
+            r2 = 0
+        if np.isnan(cv):
+            cv = 1
         
-        # 基于浊度段的强制推荐
-        if '低浊' in segment and '中' not in segment:
-            # 低浊(0-20): 机理模型
-            return "机理模型（低浊工况，投药规律简单）"
+        # 1. 样本量检查
+        if sample_count < 500:
+            return "烧杯实验 + 专家规则（样本不足）"
         
-        elif '中低' in segment or '中浊' in segment:
-            # 中低/中浊(20-100): 数据驱动
-            return "数据驱动（样本充足，适合机器学习）"
+        # 2. 线性关系明确 → 机理模型
+        if r2 > 0.5:
+            if cv < 0.3:
+                return "机理模型（线性关系明确且稳定）"
+            else:
+                return "机理模型 + 动态调整（线性但有波动）"
         
-        elif '中高' in segment:
-            # 中高浊(100-200): 混合方法
-            return "混合方法（数据驱动 + 机理约束）"
+        # 3. 有一定相关性 → 数据驱动
+        if abs(correlation) > 0.3:
+            return "数据驱动（有相关性但非线性）"
         
-        elif '高浊' in segment:
-            # 高浊(>200): 机理模型 + 安全约束
-            return "机理模型 + 安全约束（极端工况）"
+        # 4. 投药稳定 → 固定规则
+        if cv < 0.3:
+            return "固定投药规则（投药稳定）"
         
-        # 默认
-        return "数据驱动"
+        # 5. 关系复杂且波动大
+        if cv > 1.0:
+            return "数据驱动 + 专家约束（波动大，需边界控制）"
+        
+        return "数据驱动（关系复杂）"
     
     # ==================== Visualization ====================
     
