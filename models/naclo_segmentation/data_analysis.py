@@ -537,7 +537,6 @@ class TurbidityAnalyzer:
                 ax.set_xlabel(f'{temp_name} (°C)', fontsize=11)
                 ax.set_ylabel('投药量', fontsize=11)
                 ax.set_title(f'投药量 vs {temp_name}（分段着色）')
-                ax.legend(title='浊度段', fontsize=8, loc='upper right')
         
         plt.tight_layout()
         if save_path:
