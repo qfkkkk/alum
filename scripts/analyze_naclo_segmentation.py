@@ -189,13 +189,6 @@ def generate_markdown_report(overview: dict, analysis_df, figures_dir: str, outp
 - 极端工况下的安全验证
 
 ---
-
-## 9. 后续建议
-
-1. **低浊段（机理模型）**：建立基于浊度的简单线性投药公式
-2. **中低/中浊段（数据驱动）**：使用 RandomForest、LightGBM 等机器学习模型
-3. **中高浊段（混合方法）**：数据驱动 + 机理约束（设置上下限）
-4. **高浊段（机理+安全约束）**：使用专家规则，确保安全投药量
 """
     
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
