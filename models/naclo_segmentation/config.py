@@ -14,10 +14,10 @@ class Config:
     dose_col: str = "dose_1"               # 投药量列名
     time_col: str = "time"                 # 时间列名
     
-    # Segmentation thresholds (NTU) - 可根据分析结果调整
-    segment_bins: List[float] = field(default_factory=lambda: [0, 0.5, 1.0, 2.0, 5.0, 10.0, float('inf')])
+    # Segmentation thresholds (NTU) - 根据水厂标准：>200 为高浊
+    segment_bins: List[float] = field(default_factory=lambda: [0, 20, 50, 100, 200, float('inf')])
     segment_labels: List[str] = field(default_factory=lambda: [
-        '极低(<0.5)', '低(0.5-1)', '中低(1-2)', '中(2-5)', '高(5-10)', '极高(>10)'
+        '低浊(0-20)', '中低浊(20-50)', '中浊(50-100)', '中高浊(100-200)', '高浊(>200)'
     ])
     
     # Decision thresholds

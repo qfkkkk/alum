@@ -169,23 +169,31 @@ class TurbidityAnalyzer:
         df: pd.DataFrame, 
         save_path: Optional[str] = None
     ) -> None:
-        """Plot turbidity distribution histogram."""
+        """Plot turbidity distribution histogram with clipped x-axis."""
         fig, ax = plt.subplots(figsize=(10, 6))
         
         turb = df[self.config.turbidity_col]
         
-        ax.hist(turb, bins=50, alpha=0.7, color='steelblue', edgecolor='white')
+        # 裁剪到 99% 分位数以内，避免极端值拉宽坐标轴
+        x_max = turb.quantile(0.99)
+        turb_clipped = turb[turb <= x_max]
+        
+        ax.hist(turb_clipped, bins=50, alpha=0.7, color='steelblue', edgecolor='white')
         ax.axvline(turb.mean(), color='red', linestyle='--', linewidth=2, label=f'均值: {turb.mean():.2f}')
         ax.axvline(turb.median(), color='orange', linestyle='-', linewidth=2, label=f'中位数: {turb.median():.2f}')
         
-        # 添加分段线
+        # 添加分段线（只显示在可见范围内的）
         for threshold in self.config.segment_bins[1:-1]:
-            ax.axvline(threshold, color='gray', linestyle=':', alpha=0.7)
+            if threshold <= x_max:
+                ax.axvline(threshold, color='gray', linestyle=':', alpha=0.7)
+                ax.text(threshold, ax.get_ylim()[1] * 0.9, f'{int(threshold)}', 
+                       ha='center', fontsize=8, color='gray')
         
         ax.set_xlabel('进水浊度 (NTU)')
         ax.set_ylabel('频数')
-        ax.set_title('进水浊度分布')
+        ax.set_title(f'进水浊度分布（显示 99% 分位数以内，≤{x_max:.0f} NTU）')
         ax.legend()
+        ax.set_xlim(0, x_max * 1.05)
         
         plt.tight_layout()
         if save_path:
@@ -198,29 +206,24 @@ class TurbidityAnalyzer:
         analysis_df: pd.DataFrame, 
         save_path: Optional[str] = None
     ) -> None:
-        """Plot segment sample counts."""
-        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        """Plot segment sample counts (bar chart only, no pie chart)."""
+        fig, ax = plt.subplots(figsize=(10, 6))
         
         # 柱状图
-        ax1 = axes[0]
         colors = plt.cm.Blues(np.linspace(0.3, 0.9, len(analysis_df)))
-        bars = ax1.bar(analysis_df['segment'], analysis_df['sample_count'], color=colors)
-        ax1.set_xlabel('进水浊度段')
-        ax1.set_ylabel('样本数量')
-        ax1.set_title('各段样本数量')
-        plt.setp(ax1.xaxis.get_majorticklabels(), rotation=30, ha='right')
+        bars = ax.bar(analysis_df['segment'], analysis_df['sample_count'], color=colors)
+        ax.set_xlabel('进水浊度段')
+        ax.set_ylabel('样本数量')
+        ax.set_title('各段样本数量分布')
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=15, ha='right')
         
-        # 添加数值标签
-        for bar, pct in zip(bars, analysis_df['percentage']):
-            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 100,
-                    f'{pct:.1f}%', ha='center', va='bottom', fontsize=9)
+        # 添加数值标签（样本数和占比）
+        for bar, cnt, pct in zip(bars, analysis_df['sample_count'], analysis_df['percentage']):
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 100,
+                    f'{int(cnt):,}\n({pct:.1f}%)', ha='center', va='bottom', fontsize=9)
         
-        # 饼图
-        ax2 = axes[1]
-        valid_data = analysis_df[analysis_df['sample_count'] > 0]
-        ax2.pie(valid_data['sample_count'], labels=valid_data['segment'], 
-                autopct='%1.1f%%', colors=colors[:len(valid_data)])
-        ax2.set_title('各段占比')
+        # 设置 y 轴范围留出标签空间
+        ax.set_ylim(0, analysis_df['sample_count'].max() * 1.2)
         
         plt.tight_layout()
         if save_path:
@@ -233,27 +236,40 @@ class TurbidityAnalyzer:
         df: pd.DataFrame, 
         save_path: Optional[str] = None
     ) -> None:
-        """Plot dose vs turbidity scatter with segments colored."""
+        """Plot dose vs turbidity scatter with clipped axes."""
         df = self.segment_data(df)
+        
+        # 计算裁剪范围（99%分位数）
+        x_max = df[self.config.turbidity_col].quantile(0.99)
+        y_max = df[self.config.dose_col].quantile(0.99)
+        
+        # 只保留范围内的数据
+        df_clipped = df[
+            (df[self.config.turbidity_col] <= x_max) & 
+            (df[self.config.dose_col] <= y_max)
+        ]
         
         fig, ax = plt.subplots(figsize=(12, 8))
         
         # 分段着色
-        segments = df['segment'].unique()
+        segments = self.config.segment_labels
         colors = plt.cm.tab10(np.linspace(0, 1, len(segments)))
         
         for seg, color in zip(segments, colors):
-            seg_data = df[df['segment'] == seg]
-            ax.scatter(
-                seg_data[self.config.turbidity_col],
-                seg_data[self.config.dose_col],
-                alpha=0.3, s=10, label=seg, color=color
-            )
+            seg_data = df_clipped[df_clipped['segment'] == seg]
+            if len(seg_data) > 0:
+                ax.scatter(
+                    seg_data[self.config.turbidity_col],
+                    seg_data[self.config.dose_col],
+                    alpha=0.3, s=10, label=f'{seg} ({len(seg_data):,})', color=color
+                )
         
         ax.set_xlabel('进水浊度 (NTU)')
         ax.set_ylabel('投药量')
-        ax.set_title('投药量 vs 进水浊度（分段着色）')
-        ax.legend(title='浊度段', loc='upper left')
+        ax.set_title(f'投药量 vs 进水浊度（显示 99% 分位数以内）')
+        ax.legend(title='浊度段', loc='upper right', fontsize=9)
+        ax.set_xlim(0, x_max * 1.05)
+        ax.set_ylim(0, y_max * 1.05)
         
         plt.tight_layout()
         if save_path:
