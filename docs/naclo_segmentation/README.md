@@ -14,25 +14,34 @@ python scripts/analyze_naclo_segmentation.py
 python scripts/analyze_naclo_segmentation.py --generate-report
 ```
 
-## 分段策略
+## 分段策略（水厂标准）
 
-| 浊度段 | 可能的建模方法 |
-|-------|---------------|
-| 极低 (< 0.5 NTU) | 机理模型 / 固定比例 |
-| 低 (0.5-1 NTU) | 根据分析结果决定 |
-| 中低 (1-2 NTU) | 根据分析结果决定 |
-| 中 (2-5 NTU) | 根据分析结果决定 |
-| 高 (5-10 NTU) | 根据分析结果决定 |
-| 极高 (> 10 NTU) | 机理模型 + 安全约束 |
+| 浊度段 | 浊度范围 |
+|-------|---------|
+| 低浊 | 0-20 NTU |
+| 中低浊 | 20-50 NTU |
+| 中浊 | 50-100 NTU |
+| 中高浊 | 100-200 NTU |
+| 高浊 | > 200 NTU |
 
-## 决策依据
+## 决策逻辑（基于数据指标）
 
-| 指标 | 数据驱动 | 机理模型 |
-|-----|---------|---------|
-| 样本量 | > 1000 | < 1000 |
-| 相关系数 | - | > 0.7 |
-| 线性 R² | < 0.6 | > 0.6 |
-| 变异系数 | > 0.2 | < 0.2 |
+| 条件 | 推荐方法 |
+|-----|---------|
+| 样本量 < 500 | 烧杯实验 + 专家规则 |
+| R² > 0.5 | 机理模型（线性关系明确） |
+| 相关系数 > 0.3 | 数据驱动（有相关性但非线性） |
+| CV < 0.3 | 固定投药规则（投药稳定） |
+| CV > 1.0 | 数据驱动 + 专家约束（波动大） |
+
+## 分析内容
+
+1. **进水浊度分布** - 直方图 + 分段阈值
+2. **分段统计** - 各段样本量和占比
+3. **投药量 vs 浊度关系** - 分段着色散点图
+4. **关系明确性分析** - 相关系数、R²、CV
+5. **多特征分析** - 流量、浊度×流量交互
+6. **水温分析** - 水下温度、水面温度
 
 ## 输出文件
 
@@ -42,7 +51,9 @@ output/naclo_segmentation/
 │   ├── turbidity_distribution.png
 │   ├── segment_counts.png
 │   ├── dose_vs_turbidity.png
-│   └── segment_metrics.png
+│   ├── segment_metrics.png
+│   ├── multifeature_analysis.png
+│   └── temperature_analysis.png
 └── segment_analysis.csv
 
 docs/naclo_segmentation/
