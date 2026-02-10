@@ -249,7 +249,7 @@ def main():
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--batch-size', type=int, default=64)
     parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--seq-len', type=int, default=30)
+    parser.add_argument('--seq-len', type=int, default=60)
     parser.add_argument('--pred-len', type=int, default=6)
     parser.add_argument('--patch-len', type=int, default=6)
     parser.add_argument('--stride', type=int, default=3)
