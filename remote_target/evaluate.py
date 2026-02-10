@@ -380,15 +380,36 @@ def main():
     print(f"使用设备: {device}")
 
     pools = [1, 2, 3, 4] if args.all else [args.pool]
+    all_metrics = {}
 
     for pool_id in pools:
-        evaluate_pool(
+        metrics = evaluate_pool(
             pool_id=pool_id,
             csv_path=args.csv,
             output_dir=args.output,
             n_samples=args.n_samples,
             device=device,
         )
+        if metrics is not None:
+            all_metrics[f'pool_{pool_id}'] = metrics
+
+    # 汇总表格（多池评估时显示）
+    if len(all_metrics) > 1:
+        # 保存汇总指标
+        with open(os.path.join(args.output, 'all_pool_metrics.json'), 'w') as f:
+            json.dump(all_metrics, f, indent=2, ensure_ascii=False)
+
+        print(f"\n{'='*60}")
+        print(f"  汇总")
+        print(f"{'='*60}")
+        print(f"  {'Pool':>6} | {'MAE':>8} | {'RMSE':>8} | {'R²':>8} | {'Dir.Acc':>8}")
+        print(f"  {'-'*6} | {'-'*8} | {'-'*8} | {'-'*8} | {'-'*8}")
+        for pool_id in pools:
+            key = f'pool_{pool_id}'
+            if key in all_metrics:
+                m = all_metrics[key]
+                print(f"  {pool_id:>6} | {m['MAE']:>8.4f} | {m['RMSE']:>8.4f} | "
+                      f"{m['R2']:>8.4f} | {m['Direction_Accuracy']:>7.2%}")
 
     print("\n🎉 评估完成！")
 
