@@ -1,6 +1,8 @@
 # xPatch 出水浊度预测
 
-基于 xPatch 模型的水厂出水浊度多步预测系统。输入 30 个时间步（5min/步）的历史数据，预测未来 6 步的出水浊度。
+基于 xPatch 模型的水厂出水浊度多步预测系统。输入 60 个时间步（5min/步）的历史数据，预测未来 6 步的出水浊度。
+
+*结果及模型：https://drive.google.com/drive/folders/1Eo2uLMbdD6wXgURYTUr64zjW4ya7qn-N?dmr=1&ec=wgc-drive-hero-goto*
 
 ## 项目结构
 
@@ -135,7 +137,7 @@ output/
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--seq-len` | 30 | 输入窗口长度 |
+| `--seq-len` | 60 | 输入窗口长度 |
 | `--pred-len` | 6 | 预测步数 |
 | `--patch-len` | 6 | Patch 长度 |
 | `--stride` | 3 | Patch 步长 |
@@ -156,4 +158,6 @@ output/
 }
 ```
 
-共 30 行，每行包含 6 个特征。
+共 60 行，每行包含 6 个特征。
+
+
