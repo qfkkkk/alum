@@ -1,32 +1,30 @@
-# -*- encoding: utf-8 -*-
-"""
-优化器模块
-提供投药量优化相关的优化器类
-"""
+'''
+Author: wangzhuoyang wangzhuoyang@ciictec.com
+Date: 2026-02-11 16:20:23
+LastEditors: wangzhuoyang wangzhuoyang@ciictec.com
+LastEditTime: 2026-02-11 17:56:38
+FilePath: /alum/optimizers/__init__.py
+Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+'''
+
 from .base_optimizer import BaseOptimizer
-from .dosing_optimizer import DosingOptimizer
+from .dummy_optimizer import DummyOptimizer
 
-
-def create_optimizer(optimizer_type: str, **kwargs):
+def create_optimizer(optimizer_type: str = 'dummy', config: dict = None) -> BaseOptimizer:
     """
-    优化器工厂函数
+    创建优化器实例
     
     参数：
-        optimizer_type: 优化器类型
-            - 'dosing': 投药量优化器
-        **kwargs: 传递给优化器构造函数的参数
-    
+        optimizer_type: 优化器类型 ('dummy', 'mpc', 'rl' 等)
+        config: 配置字典
+        
     返回：
         BaseOptimizer: 优化器实例
-    
-    使用示例：
-        optimizer = create_optimizer('dosing', efficiency_threshold=0.8)
     """
-    optimizers = {
-        'dosing': DosingOptimizer,
-    }
-    
-    if optimizer_type not in optimizers:
-        raise ValueError(f"未知的优化器类型: {optimizer_type}，可用类型: {list(optimizers.keys())}")
-    
-    return optimizers[optimizer_type](**kwargs)
+    if config is None:
+        config = {}
+        
+    if optimizer_type == 'dummy':
+        return DummyOptimizer(config)
+    else:
+        raise ValueError(f"Unknown optimizer type: {optimizer_type}")
