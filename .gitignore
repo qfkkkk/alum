@@ -1,4 +1,5 @@
 *.pt
+*.csv
 *.pkl
 __pycache__/
 *.py[cod]
