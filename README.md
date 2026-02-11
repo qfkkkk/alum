@@ -125,6 +125,31 @@ predictor = create_predictor('xPatch', pool_id=1, config=config)
 predictions = predictor.predict(input_data)  # [60, 6] -> [6]
 ```
 
+### 投药优化管道 (Pipeline)
+```python
+from services.dosing_pipeline import DosingPipeline
+from datetime import datetime
+
+# 初始化
+pipeline = DosingPipeline()  # 自动加载配置
+
+# 执行全流程 (数据适配 -> 预测 -> 特征提取 -> 优化)
+result = pipeline.run(
+    raw_data=input_data_dict, 
+    last_dt=datetime(2026, 2, 11, 12, 0)
+)
+
+# 单独执行优化 (调试用)
+# predictions: {pool_id: {time: val}}
+recommendations = pipeline.optimize_only(predictions)
+
+# 单独执行预测 (调试用)
+predictions = pipeline.predict_only(
+    input_data=input_data_dict,
+    last_dt=datetime(2026, 2, 11, 12, 0)
+)
+```
+
 ### 启动服务
 ```bash
 # 仅API服务
