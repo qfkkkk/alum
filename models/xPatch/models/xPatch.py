@@ -2,11 +2,11 @@ import torch
 import torch.nn as nn
 import math
 
-from layers.decomp import DECOMP
-from layers.network import Network
-# from layers.network_mlp import NetworkMLP # For ablation study with MLP-only stream
-# from layers.network_cnn import NetworkCNN # For ablation study with CNN-only stream
-from layers.revin import RevIN
+from ..layers.decomp import DECOMP
+from ..layers.network import Network
+# from ..layers.network_mlp import NetworkMLP # For ablation study with MLP-only stream
+# from ..layers.network_cnn import NetworkCNN # For ablation study with CNN-only stream
+from ..layers.revin import RevIN
 
 class Model(nn.Module):
     def __init__(self, configs):

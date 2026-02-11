@@ -1,8 +1,8 @@
 import torch
 from torch import nn
 
-from layers.ema import EMA
-from layers.dema import DEMA
+from .ema import EMA
+from .dema import DEMA
 
 class DECOMP(nn.Module):
     """
