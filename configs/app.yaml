@@ -1,0 +1,34 @@
+# 预测器配置
+# 用于 TurbidityPredictor 和 TurbidityPredictorManager
+
+# 模型架构
+model_arch: "xPatch"
+checkpoint_base_dir: "checkpoints"
+device: "auto"  # auto / cpu / cuda
+
+# 步长配置
+seq_len: 60          # 输入步长（历史数据点数）
+pred_len: 6          # 输出步长（预测未来点数）
+time_interval_minutes: 5  # 数据采样间隔（分钟）
+
+# 特征配置
+features:
+  - dose
+  - turb_chushui
+  - turb_jinshui
+  - flow
+  - pH
+  - temp_shuimian
+target_feature: "turb_chushui"
+target_feature_idx: 1  # turb_chushui 在 features 列表中的索引
+
+# 池子配置
+pools:
+  pool_1:
+    enabled: true
+  pool_2:
+    enabled: true
+  pool_3:
+    enabled: true
+  pool_4:
+    enabled: true
