@@ -19,7 +19,7 @@ alum/
 │       ├── layers/            #     网络层组件
 │       └── models/            #     模型类定义
 │
-├── checkpoints/               # 训练好的模型权重（.pt/.pkl，不入Git）
+├── checkpoints/               # 训练好的模型权重（.pt/.pkl）
 │   └── xPatch/                #   xPatch 各池权重
 │       ├── pool_1/            #     1号池模型
 │       ├── pool_2/            #     2号池模型
@@ -27,9 +27,10 @@ alum/
 │       └── pool_4/            #     4号池模型
 │
 ├── predictors/                # 预测器（模型加载 + 推理流程）
-│   ├── __init__.py            #   工厂函数 create_predictor()
-│   ├── base_predictor.py      #   预测器抽象基类
-│   └── turbidity_predictor.py #   浊度预测器实现
+│   ├── __init__.py            #   工厂函数 + 导出
+│   ├── base_predictor.py      #   预测器抽象基类（模板方法）
+│   ├── turbidity_predictor.py #   出水浊度预测器
+│   └── predictor_manager.py   #   多池预测管理器
 │
 ├── optimizers/                # 优化器（投药量优化算法）
 │   ├── __init__.py            #   工厂函数 create_optimizer()
@@ -42,7 +43,10 @@ alum/
 │   ├── dosing_api.py          #   纯API服务
 │   └── dosing_scheduler.py    #   API + 定时调度
 │
-├── dataio/                      # 数据加载与获取
+├── configs/                   # 配置文件
+│   └── app.yaml               #   应用配置（模型+优化+服务）
+│
+├── dataio/                    # 数据加载与获取
 │   ├── __init__.py
 │   ├── data_factory.py        #   数据工厂（读取、上传）
 │   └── data_loader.py         #   平台数据接口
@@ -58,6 +62,7 @@ alum/
 
 | 层级 | 目录 | 职责 |
 |------|------|------|
+| **配置** | `configs/` | 应用配置（模型架构、步长、特征、池子开关、优化参数、路由） |
 | **模型定义** | `models/` | 网络结构定义（`nn.Module` 子类），纯代码，不含权重 |
 | **模型权重** | `checkpoints/` | 训练产出的 `.pt`/`.pkl` 文件，通过 `.gitignore` 排除 |
 | **预测器** | `predictors/` | 从 `models/` 导入结构 → 从 `checkpoints/` 加载权重 → 执行推理 |
@@ -78,10 +83,10 @@ services/  ←  组合 predictors 和 optimizers
 
 | 模式 | 位置 | 作用 |
 |------|------|------|
-| **策略模式** | `base_predictor.py`, `base_optimizer.py` | 算法可替换 |
-| **工厂模式** | `create_predictor()`, `create_optimizer()` | 统一创建对象 |
+| **策略模式** | `BasePredictor`, `BaseOptimizer` | 不同算法（xPatch/LSTM等）可互换 |
+| **模板方法** | `BasePredictor.predict()` | 通用流程骨架，子类只实现 `_infer()` |
+| **工厂模式** | `create_predictor()`, `create_manager()` | 统一创建对象 |
 | **管道模式** | `DosingPipeline` | 流程串联 |
-| **单例模式** | `get_pipeline()` | 避免重复加载模型 |
 
 ## API 路由
 
@@ -99,14 +104,25 @@ GET  /alum_dosing/latest_result        # 最新结果
 
 ## 快速使用
 
-### 代码调用
+### 预测（多池）
 ```python
-from alum import DosingPipeline
+from predictors import create_manager
 
-pipeline = DosingPipeline()
-result = pipeline.run(history_data, current_flow=1000)
+manager = create_manager()  # 自动读取 configs/app.yaml
+result = manager.predict_all(data_dict, last_datetime)
+# result = {"pool_1": {"2026-02-11 10:05": 0.32, ...}, ...}
+```
 
-print(f"最优投药量: {result['dosing_result']['optimal_dosing']} mg/L")
+### 预测（单池）
+```python
+from predictors import create_predictor
+import yaml
+
+with open('configs/app.yaml') as f:
+    config = yaml.safe_load(f)
+
+predictor = create_predictor('xPatch', pool_id=1, config=config)
+predictions = predictor.predict(input_data)  # [60, 6] -> [6]
 ```
 
 ### 启动服务
@@ -117,20 +133,3 @@ python -m alum.services.dosing_api
 # API + 定时任务
 python -m alum.services.dosing_scheduler
 ```
-
-## 扩展指南
-
-### 添加新模型架构
-1. 在 `models/` 下新建子目录（如 `models/lstm/`）
-2. 定义 `nn.Module` 子类
-3. 训练后将权重放到 `checkpoints/<模型名>/` 下
-
-### 添加新预测器
-1. 继承 `BasePredictor`
-2. 实现 `predict()` 和 `_load_model()`
-3. 在 `predictors/__init__.py` 注册
-
-### 添加新优化器
-1. 继承 `BaseOptimizer`
-2. 实现 `optimize()` 和 `get_top_n_solutions()`
-3. 在 `optimizers/__init__.py` 注册
