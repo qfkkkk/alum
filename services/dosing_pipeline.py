@@ -1,150 +1,186 @@
-# -*- encoding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
-投药优化管道
-功能：封装完整的预测→优化流程
+投药优化管道的核心服务类。
+负责协调多池预测管理器 (PredictorManager) 和投药优化器 (Optimizer)。
+提供数据适配、预测、优化以及全流程执行的功能。
+"""
 
-设计模式：管道模式 (Pipeline Pattern)
-作用：将预测和优化串联成统一流程，简化调用
-"""
 import pandas as pd
-from typing import Dict, Optional, Union
-from pathlib import Path
+import numpy as np
+from typing import Dict, List, Any, Optional
 from datetime import datetime
 
-from ..predictors import BasePredictor, create_predictor
-from ..optimizers import BaseOptimizer, create_optimizer
-
+from predictors import create_manager
+from optimizers import create_optimizer
 
 class DosingPipeline:
     """
     投药优化管道
     
     功能说明：
-        封装完整流程：数据预处理 → 浊度预测 → 投药优化
-        提供统一的调用接口
-    
-    使用示例：
-        pipeline = DosingPipeline()
-        result = pipeline.run(data, current_flow=1000)
-    
-    设计优势：
-        1. 简化调用：一个方法完成全部流程
-        2. 易于测试：可单独测试或替换任一组件
-        3. 灵活配置：可自定义预测器和优化器
+        封装完整流程：多池浊度预测 → 投药优化
+        
+    设计模式 (Adapter Pattern)：
+        通过 `_adapt_input` 方法隔离外部数据格式变化。
+        无论外部 IO 接口返回什么格式，都在 `_adapt_input` 中转换为 Pipeline 标准输入。
     """
     
-    def __init__(self,
-                 predictor: BasePredictor = None,
-                 optimizer: BaseOptimizer = None,
-                 predictor_config: Dict = None,
-                 optimizer_config: Dict = None):
+    def __init__(self, config_path: str = None, optimizer_type: str = 'dummy', optimizer_config: Dict = None):
         """
         初始化管道
-        
-        参数：
-            predictor: 预测器实例（可选，不提供则使用默认配置创建）
-            optimizer: 优化器实例（可选，不提供则使用默认配置创建）
-            predictor_config: 预测器配置（当predictor为None时使用）
-            optimizer_config: 优化器配置（当optimizer为None时使用）
-        
-        使用示例：
-            # 方式1：使用默认配置
-            pipeline = DosingPipeline()
-            
-            # 方式2：自定义预测器
-            my_predictor = TurbidityPredictor(model_path='custom.pth')
-            pipeline = DosingPipeline(predictor=my_predictor)
-            
-            # 方式3：通过配置创建
-            pipeline = DosingPipeline(
-                predictor_config={'model_path': 'model.pth'},
-                optimizer_config={'efficiency_threshold': 0.9}
-            )
         """
-        # 初始化预测器
-        if predictor is not None:
-            self.predictor = predictor
-        else:
-            config = predictor_config or {}
-            self.predictor = create_predictor('turbidity', **config)
+        # 初始化预测管理器
+        self.predictor_manager = create_manager(config_path)
         
         # 初始化优化器
-        if optimizer is not None:
-            self.optimizer = optimizer
+        self.optimizer = create_optimizer(optimizer_type, optimizer_config)
+        
+    def _adapt_input(self, raw_data: Any) -> Dict[str, np.ndarray]:
+        """
+        核心适配层
+        功能：将外部未知的 IO 数据格式，转换为 Pipeline 标准输入格式。
+        
+        当前逻辑：
+            假设 raw_data 已经是 Dict[str, np.ndarray] 或 Dict[str, pd.DataFrame]
+            如果是其他格式（例如 PLC 原始 json），在这里写转换逻辑。
+        """
+        # TODO: 未来对接真实 IO 接口时，只需修改此方法
+        if isinstance(raw_data, dict):
+            # 简单的透传或转换
+            return raw_data
         else:
-            config = optimizer_config or {}
-            self.optimizer = create_optimizer('dosing', **config)
-    
-    def run(self, 
-            data: pd.DataFrame,
-            current_flow: float,
-            current_dosing: float = None,
-            constraints: Dict = None) -> Dict:
-        """
-        执行完整优化流程
-        
-        参数：
-            data: 输入数据DataFrame
-                - 需包含至少30个时间点的历史数据
-                - 必需列：datetime, turbidity_in, flow, ph, temperature
-            current_flow: 当前进水流量 (m³/h)
-            current_dosing: 当前投药量 (mg/L)，可选
-            constraints: 约束条件，可选
-        
-        返回：
-            Dict: 完整结果，包含：
-                - status: str，'success' 或 'error'
-                - turbidity_predictions: pd.DataFrame，浊度预测结果
-                - dosing_result: Dict，投药优化结果
-                    - optimal_dosing: float，最优投药量
-                    - recommendations: List，TopN推荐
-                - generated_at: str，生成时间戳
-                - error: str，错误信息（仅当status='error'时）
-        
-        使用示例：
-            result = pipeline.run(history_data, current_flow=1000)
-            if result['status'] == 'success':
-                print(f"最优投药量: {result['dosing_result']['optimal_dosing']}")
-        """
-        pass
-    
-    def predict_only(self, data: pd.DataFrame) -> Dict:
-        """
-        仅执行预测（不优化）
-        
-        参数：
-            data: 输入数据DataFrame
-        
-        返回：
-            Dict: 预测结果
-                - status: str
-                - predictions: pd.DataFrame
-                - generated_at: str
-        """
-        pass
-    
-    def optimize_only(self, 
-                      predictions: pd.DataFrame,
-                      current_flow: float,
-                      current_dosing: float = None,
-                      constraints: Dict = None) -> Dict:
-        """
-        仅执行优化（使用已有的预测结果）
-        
-        参数：
-            predictions: 已有的浊度预测结果
-            current_flow: 当前进水流量
-            current_dosing: 当前投药量
-            constraints: 约束条件
-        
-        返回：
-            Dict: 优化结果
-        """
-        pass
+            raise ValueError(f"Unsupported data format: {type(raw_data)}")
 
+    def _extract_last_features(self, input_data: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
+        """
+        从输入数据中提取最后时刻 (t) 的所有特征值
+        
+        参数:
+            input_data: 适配后的输入数据 (Dict[pool_id, DataFrame/Array])
+            
+        返回:
+            Dict[pool_id, Dict[feature_name, value]]
+        """
+        features_dict = {}
+        
+        # 优先从 config 获取特征列表，这比从 predictor 实例获取更直接
+        feature_names = self.predictor_manager.config.get('features', [])
+        
+        # 如果 config 里也是空的，尝试 fallback 到 predictor 实例
+        if not feature_names and self.predictor_manager.predictors:
+             first_predictor = next(iter(self.predictor_manager.predictors.values()))
+             feature_names = first_predictor.features
+        
+        for pool_id, data in input_data.items():
+            last_row = None
+            
+            if isinstance(data, pd.DataFrame):
+                # 如果是 DataFrame，直接取最后一行转字典
+                last_row = data.iloc[-1].to_dict()
+                # 过滤掉非数值列（如果需要）
+                # last_row = {k: float(v) for k, v in last_row.items() if isinstance(v, (int, float))}
+                
+            elif isinstance(data, np.ndarray):
+                # 如果是 numpy array，需要结合 feature_names
+                if feature_names and data.shape[1] == len(feature_names):
+                    last_vals = data[-1, :]
+                    last_row = {name: float(val) for name, val in zip(feature_names, last_vals)}
+                else:
+                    # 没有特征名，只能用索引 'feat_0', 'feat_1'...
+                    last_vals = data[-1, :]
+                    last_row = {f"feat_{i}": float(val) for i, val in enumerate(last_vals)}
+            
+            if last_row:
+                features_dict[pool_id] = last_row
+                
+        return features_dict
+
+    def predict_only(self, 
+                     input_data: Dict[str, np.ndarray], 
+                     last_dt: datetime) -> Dict[str, Dict[str, float]]:
+        """
+        纯预测功能
+        返回: {pool_id: {time: val}} (6个点)
+        """
+        # 调用预测管理器 (Predictor 内部会处理标准化等)
+        return self.predictor_manager.predict_all(input_data, last_dt)
+
+    def optimize_only(self, 
+                      predictions: Dict[str, Dict[str, float]], 
+                      current_features: Dict[str, Dict[str, float]] = None) -> Dict[str, Dict[str, float]]:
+        """
+        纯优化功能
+        输入: 
+            predictions: 预测结果 {pool_id: {time: val}} (6个点)
+            current_features: 当前全量特征 {pool_id: {feat: val}}
+            
+        返回: 推荐结果 {pool_id: {time: val}} (5个点)
+        """
+        results = {}
+        
+        # 1. 准备时间戳映射 (用于后续将优化结果 List 映射回 Dict)
+        pool_timestamps = {} 
+        
+        for pool_id, time_dict in predictions.items():
+            # 排序确保时间顺序
+            sorted_items = sorted(time_dict.items(), key=lambda x: x[0])
+            timestamps = [item[0] for item in sorted_items]
+            pool_timestamps[pool_id] = timestamps
+            
+        # 2. 执行优化 (直接传入带时间戳的 predictions)
+        # BaseOptimizer 接口已更新为接收 Dict[str, Dict[Any, float]]
+        opt_results = self.optimizer.optimize(
+            predictions, 
+            current_features=current_features
+        )
+        
+        # 3. 结果映射回时间戳 (取前5个时间点)
+        for pool_id, rec_values in opt_results.items():
+            if pool_id in pool_timestamps:
+                timestamps = pool_timestamps[pool_id]
+                rec_dict = {}
+                # 优化器返回 5 个点，对应 timestamps 的前 5 个
+                for i, rec_val in enumerate(rec_values):
+                    if i < len(timestamps):
+                        rec_dict[timestamps[i]] = rec_val
+                results[pool_id] = rec_dict
+                
+        return results
+
+    def run(self, 
+            raw_data: Any, 
+            last_dt: datetime) -> Dict[str, Any]:
+        """
+        全流程执行：适配 -> 预测 + 提取特征 -> 优化
+        """
+        results = {}
+        
+        # 1. 数据适配 (Adapter)
+        clean_input = self._adapt_input(raw_data)
+        
+        # 2. 执行预测
+        predictions = self.predict_only(clean_input, last_dt)
+        
+        # 3. 提取当前特征 (用于优化器决策)
+        current_features = self._extract_last_features(clean_input)
+        
+        # 4. 执行优化
+        recommendations = self.optimize_only(
+            predictions, 
+            current_features=current_features
+        )
+        
+        # 5. 组装最终结果
+        for pool_id in predictions.keys():
+            pool_res = {
+                'status': 'success',
+                'predictions': predictions[pool_id],
+                'recommendations': recommendations.get(pool_id, {}),
+                'generated_at': datetime.now().isoformat()
+            }
+            results[pool_id] = pool_res
+            
+        return results
 
 if __name__ == "__main__":
-    # 测试代码
-    print("投药优化管道测试")
-    # pipeline = DosingPipeline()
-    # result = pipeline.run(test_data, current_flow=1000)
+    pass
