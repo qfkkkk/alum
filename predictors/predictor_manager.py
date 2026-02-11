@@ -14,6 +14,7 @@ from datetime import datetime
 import numpy as np
 
 from .turbidity_predictor import TurbidityPredictor
+from utils.config_loader import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -38,26 +39,13 @@ class TurbidityPredictorManager:
         初始化管理器
 
         参数：
-            config_path: predictor.yaml 路径，默认为 configs/predictor.yaml
+            config_path: predictor.yaml 路径，默认为 configs/app.yaml
         """
-        if config_path is None:
-            config_path = Path(__file__).parent.parent / 'configs' / 'app.yaml'
-        else:
-            config_path = Path(config_path)
-
-        self.config = self._load_config(config_path)
+        self.config = load_config(config_path)
         self.predictors: Dict[str, TurbidityPredictor] = {}
         self.time_interval = self.config.get('time_interval_minutes', 5)
 
         self._init_predictors()
-
-    def _load_config(self, config_path: Path) -> dict:
-        """加载 YAML 配置"""
-        if not config_path.exists():
-            raise FileNotFoundError(f"配置文件不存在: {config_path}")
-
-        with open(config_path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
 
     def _init_predictors(self):
         """根据配置初始化各池预测器"""
