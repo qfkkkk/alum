@@ -41,11 +41,12 @@ def load_and_preprocess(csv_path: str, pool_id: int):
 
     feature_names = POOL_FEATURES[pool_id]
     df_pool = df[feature_names].copy()
+    dates = df['DateTime']
 
     # 缺失值处理: 前向填充 → 线性插值 → 剩余用 0 填充
     df_pool = df_pool.ffill().interpolate(method='linear').fillna(0)
 
-    return df_pool, feature_names
+    return df_pool, feature_names, dates
 
 
 class TurbidityDataset(Dataset):
@@ -115,7 +116,7 @@ def create_datasets(csv_path: str, pool_id: int, seq_len: int = 30,
     Returns:
         train_ds, val_ds, test_ds, scaler, feature_names
     """
-    df_pool, feature_names = load_and_preprocess(csv_path, pool_id)
+    df_pool, feature_names, _ = load_and_preprocess(csv_path, pool_id)
     data = df_pool.values  # [T, n_features]
 
     n = len(data)

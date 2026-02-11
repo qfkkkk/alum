@@ -115,7 +115,7 @@ def predict_from_csv(pool_id: int, csv_path: str, start_row: int = None,
     seq_len = model_cfg.seq_len
 
     # 加载数据
-    df_pool, feature_names = load_and_preprocess(csv_path, pool_id)
+    df_pool, feature_names, dates = load_and_preprocess(csv_path, pool_id)
     data = df_pool.values
 
     if start_row is None:
@@ -127,10 +127,25 @@ def predict_from_csv(pool_id: int, csv_path: str, start_row: int = None,
             f"需要从 start_row 开始取 {seq_len} 行"
         )
 
+    # 提取输入数据和时间
     input_data = data[start_row: start_row + seq_len]  # [seq_len, n_features]
+    input_dates = dates.iloc[start_row: start_row + seq_len]
+
+    # 推理
     predictions = predict(model, scaler, model_cfg, use_diff, input_data, device)
 
-    return predictions, input_data, feature_names
+    # 计算未来时间
+    if len(input_dates) >= 2:
+        # 根据最后两个时间点推断间隔
+        interval = input_dates.iloc[-1] - input_dates.iloc[-2]
+    else:
+        # 默认 5 分钟 (或者抛出警告)
+        interval = pd.Timedelta(minutes=5)
+
+    last_date = input_dates.iloc[-1]
+    future_dates = [last_date + interval * (i + 1) for i in range(len(predictions))]
+
+    return predictions, input_data, feature_names, future_dates
 
 
 def predict_from_json(pool_id: int, json_path: str,
@@ -182,7 +197,7 @@ def main():
             print(f"  t+{i+1}: {val:.4f}")
 
     elif args.csv:
-        predictions, input_data, feature_names = predict_from_csv(
+        predictions, input_data, feature_names, future_dates = predict_from_csv(
             args.pool, args.csv, args.start_row, args.output, device
         )
 
@@ -195,7 +210,8 @@ def main():
         for i, val in enumerate(predictions):
             delta = val - last_turb
             arrow = "↑" if delta > 0 else "↓" if delta < 0 else "→"
-            print(f"    t+{i+1}: {val:.4f}  ({arrow} {delta:+.4f})")
+            date_str = future_dates[i].strftime('%Y-%m-%d %H:%M:%S')
+            print(f"    {date_str} (t+{i+1}): {val:.4f}  ({arrow} {delta:+.4f})")
     else:
         print("请指定 --csv 或 --json 输入数据")
         return
