@@ -32,7 +32,8 @@ time_format = '%Y-%m-%d %H:%M:%S'
 
 # 配置文件路径 - 支持 alum_dosing.yaml
 path = Path(__file__)
-data_config_path = path.parent.parent.parent.parent / 'conf' / 'alum_dosing.yaml'
+# 从 dataio/data_factory.py -> alum/ -> configs/alum_dosing.yaml
+data_config_path = path.parent.parent / 'configs' / 'alum_dosing.yaml'
 print('data_config_path:', data_config_path)
 
 # 延迟加载配置，避免文件不存在时报错
