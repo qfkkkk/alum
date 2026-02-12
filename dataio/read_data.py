@@ -2,7 +2,9 @@ import sys
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from typing import Dict
+from typing import Dict, Tuple
+from datetime import datetime
+import re
 
 
 _root = Path(__file__).resolve().parent.parent
@@ -11,15 +13,32 @@ if str(_root) not in sys.path:
 from dataio.data_factory import load_agg_data
 from utils.config_loader import load_alum_config
 
-def read_data(model_name='optimized_dose', config_file='configs/alum_dosing.yaml'):
+def read_data(
+    model_name: str = 'optimized_dose',
+    config_file: str = 'configs/alum_dosing.yaml',
+    num_pools: int = 4,
+    debug: bool = False,
+) -> Tuple[Dict[str, np.ndarray], datetime]:
     """
-    测试读取聚合数据
+    读取聚合数据并按池子分组转换为字典格式
     
     参数：
         model_name: 模型名称，可选值：
                    - 'effluent_turbidity': 沉淀池出水浊度预测模型
                    - 'optimized_dose': 投加药耗优化模型（默认）
         config_file: 配置文件路径
+        num_pools: 池子数量，默认为4
+    
+    返回：
+        Tuple[Dict[str, np.ndarray], datetime]：
+        - 第一个元素：Dict[str, np.ndarray]
+          - key: "pool_1", "pool_2", "pool_3", "pool_4"
+          - value: shape为 (n_timesteps, 6) 的数组
+          - 6个特征列的固定顺序：dose, turb_chushui, turb_jinshui, flow, pH, temp_shuimian
+        - 第二个元素：datetime，数据的最后时间点
+    
+    Example:
+        输出: ({"pool_1": ndarray[60, 6], "pool_2": ndarray[60, 6], ...}, datetime(2026, 2, 12, 10, 30, 0))
     """
     # 加载配置文件
     print(f"加载配置文件: {config_file}")
@@ -45,76 +64,71 @@ def read_data(model_name='optimized_dose', config_file='configs/alum_dosing.yaml
     
     # 重命名列名：将 AttributeCode 替换为 friendly_name
     if data is not None and not data.empty:
-        
-        # 重命名列（只重命名存在于映射字典中的列）
+        # 重命名列
         data = data.rename(columns=column_mapping)
-
-    return data
-def transform_data_by_pool(df: pd.DataFrame, num_pools: int = 4) -> Dict[str, np.ndarray]:
-    """
-    将DataFrame数据按池子分组转换为 Dict[str, np.ndarray]，不包含时间特征。
     
-    Args:
-        df: 包含时间列和各池子数据的DataFrame
-            列名格式示例: time, FTJZ_Turb_1_Instant, FTJZ_Turb_2_Instant, ...
-        num_pools: 池子数量，默认为4
-    
-    Returns:
-        Dict[str, np.ndarray]：
-        - key: "pool_1", "pool_2", "pool_3", "pool_4"
-        - value: shape为 (n_timesteps, 6) 的数组
-        - 6个特征列的固定顺序：dose, turb_chushui, turb_jinshui, flow, pH, temp_shuimian
-    
-    Example:
-        输入: DataFrame with columns [time, dose_1, turb_chushui_1, ...]
-        输出: {"pool_1": ndarray[60, 6], "pool_2": ndarray[60, 6], ...}
-    """
-    # 固定的特征顺序（不包含时间）
+    # 固定的特征顺序
     FEATURE_ORDER = ['dose', 'turb_chushui', 'turb_jinshui', 'flow', 'pH', 'temp_shuimian']
     
-    # 如果 time 在列中，去掉它（我们不需要时间特征）
-    if 'time' in df.columns:
-        df = df.drop(columns=['time'])
+    # 保存最后一个时间点
+    last_time = None
+    if 'time' in data.columns:
+        last_time = pd.to_datetime(data['time'].iloc[-1])
+        data = data.drop(columns=['time'])
+    elif isinstance(data.index, pd.DatetimeIndex) or data.index.name == 'time':
+        last_time = pd.to_datetime(data.index[-1])
+        data = data.reset_index(drop=True)
     
-    # 如果 time 是索引，重置索引但不保留时间列
-    if isinstance(df.index, pd.DatetimeIndex) or df.index.name == 'time':
-        df = df.reset_index(drop=True)
+    # 如果没有找到时间信息，使用当前时间
+    if last_time is None:
+        last_time = datetime.now()
+    else:
+        # 转换为 datetime 对象
+        last_time = last_time.to_pydatetime()
     
     result: Dict[str, np.ndarray] = {}
-    
+
+    # 构建列映射：(feature_base_lower, pool_id|None) -> 原始列名
+    col_map: Dict[Tuple[str, int | None], str] = {}
+    for col in data.columns:
+        # 将列名解析为 (feature_base, pool_id)
+        # - turb_jinshui_1 -> ("turb_jinshui", 1)
+        # - temp_shuimian  -> ("temp_shuimian", None)
+        col_lower = str(col).strip()
+        m = re.match(r'^(?P<base>.+)_(?P<pool>\d+)$', col_lower)
+        if m:
+            base, pid = m.group('base'), int(m.group('pool'))
+        else:
+            base, pid = col_lower, None
+        col_map[(base, pid)] = col
+
     # 为每个池子构建数据
     for pool_id in range(1, num_pools + 1):
         pool_key = f"pool_{pool_id}"
         pool_data_list = []
-        
-        # 按固定顺序提取每个特征
+
+        if debug:
+            print(f"\n处理 {pool_key}:")
+
+        # 按固定顺序提取每个特征：优先取 feature_pool（如 dose_1），否则取共享列（如 temp_shuimian）
         for feature_name in FEATURE_ORDER:
-            # 尝试匹配列名：可能的格式包括 feature_name_池子号 或包含池子号的其他格式
-            matched_col = None
-            
-            # 遍历所有列，找到属于当前池子和当前特征的列
-            for col in df.columns:
-                col_lower = col.lower()
-                feature_lower = feature_name.lower()
-                
-                # 检查列名是否包含特征名和池子编号
-                # 例如: dose_1, turb_chushui_1, FTJZ_dose_1_Instant, pH_1 等
-                has_pool_id = f'_{pool_id}' in col or f'_{pool_id}_' in col
-                has_feature = feature_lower in col_lower
-                
-                if has_pool_id and has_feature:
-                    matched_col = col
-                    break
-            
-            # 如果找到匹配的列，提取数据；否则填充 NaN
+            feature_key = str(feature_name).strip()
+            matched_col = col_map.get((feature_key, pool_id)) or col_map.get((feature_key, None))
+
             if matched_col is not None:
-                pool_data_list.append(df[matched_col].values)
+                values = data[matched_col].values
+                pool_data_list.append(values)
+                if debug:
+                    vmin = np.nanmin(values) if len(values) else np.nan
+                    vmax = np.nanmax(values) if len(values) else np.nan
+                    print(f"  特征 '{feature_name}' -> 列 '{matched_col}' (min={vmin}, max={vmax})")
             else:
-                # 如果某个特征在该池子中不存在，填充 NaN
-                pool_data_list.append(np.full(len(df), np.nan))
+                pool_data_list.append(np.full(len(data), np.nan))
+                if debug:
+                    print(f"  特征 '{feature_name}' -> 未找到列，填充 NaN")
         
         # 将列表转换为 (n_timesteps, 6) 的数组
         pool_array = np.column_stack(pool_data_list)
         result[pool_key] = pool_array
     
-    return result
+    return result, last_time
