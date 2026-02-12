@@ -14,14 +14,15 @@ except ImportError:
     from dataio.data_factory import load_agg_data, upload_recommend_message
 
 
-def write_data(model_name, result) -> None:
+def write_data(model_name:str, result: Dict[str, Dict[str, float]]) -> None:  # result格式: {"pool_id": {datetime: x}}
     """
     写入推荐投加量数据
     
     :param model_name: 模型名称，可选值：
                       - 'optimized_dose': 投加药耗优化模型
                       - 'effluent_turbidity': 沉淀池出水浊度预测模型
-    :param result: 模型输出结果
+    :param result: 模型输出结果，格式为：{"pool_id": {datetime: x}}
+                  其中 pool_id 为池子ID，datetime 为时间戳，x 为预测值
     :return: None
     """
     if model_name == 'optimized_dose':
