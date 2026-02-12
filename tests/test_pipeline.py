@@ -25,12 +25,12 @@ class TestDosingPipeline(unittest.TestCase):
         self.input_data = np.random.rand(self.seq_len, self.n_features).astype(np.float32)
 
     def test_pipeline_run(self):
-        """测试完整管道流程: 预测(xPatch) -> 优化(Dummy)"""
+        """测试完整管道流程: 预测(xPatch) -> 优化(PSO)"""
         print("\n=== 测试投药优化管道 (Integration) ===")
         
         # 初始化管道
-        # 使用默认配置 (加载 app.yaml, 创建 xPatch 预测器, 创建 Dummy 优化器)
-        pipeline = DosingPipeline(optimizer_type='dummy')
+        # 使用默认配置 (加载 app.yaml, 创建 xPatch 预测器, 创建 PSO 优化器)
+        pipeline = DosingPipeline(optimizer_type='pso')
         
         # 检查是否启用了池子
         enabled_pools = pipeline.predictor_manager.enabled_pools
@@ -72,8 +72,7 @@ class TestDosingPipeline(unittest.TestCase):
                 
                 self.assertEqual(rec_times, pred_times[:5])
                 
-                # 验证 current_dosing 生效 (DummyOptimizer 逻辑)
-                # 由于 current_dosing 已移除，我们只验证返回值是 float
+                # 验证返回值类型
                 first_rec = recs[rec_times[0]]
                 print(f"  首个推荐投药量: {first_rec}")
                 self.assertIsInstance(first_rec, float)
@@ -94,10 +93,13 @@ class TestDosingPipeline(unittest.TestCase):
             
             # 手动构造特征数据传给 optimize_only
             # (在 run() 模式下这是自动提取的，这里我们需要手动构造以测试接口)
-            mock_features = {
-                'pool_1': {'ph': 7.2, 'temp': 15.0},
-                'pool_2': {'ph': 7.1, 'temp': 14.5}
-            }
+            mock_features = {}
+            for idx, pool_name in enumerate(enabled_pools):
+                mock_features[pool_name] = {
+                    'current_dose': float(15 + idx),
+                    'ph': float(7.0 + 0.1 * idx),
+                    'flow': float(2000 + 100 * idx),
+                }
             
             # 使用刚才的预测结果作为输入
             recs = pipeline.optimize_only(
