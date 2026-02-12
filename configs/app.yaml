@@ -32,3 +32,43 @@ pools:
     enabled: true
   pool_4:
     enabled: true
+
+
+# 预测时域、控制时域
+prediction_horizon: 6        # Np: 预测时域（步数），每步5分钟
+control_horizon: 5           # Nc: 控制时域（步数），每步5分钟
+time_step: 5
+
+# 沉淀池出厂水浊度目标
+target_turbidity: 1
+
+# 惩罚项权重
+lambda_du: 0.005             # λ: 控制变化量的权重系数
+
+# 约束条件
+constraints:
+  dose_min: 0                # 投矾量下限 (mg/L)
+  dose_max: 70               # 投矾量上限 (mg/L)
+  dose_rate_limit: 5.0       # 单步投矾变化量上限 (mg/L)
+
+# 优化器配置
+optimizer:
+  type: pso                  # 可选值: pso(粒子群), sa(模拟退火), de(差分进化)
+  max_iterations: 100        # 最大迭代次数
+  population_size: 50        # 种群大小（PSO/DE）
+  tolerance: 1e-6            # 收敛容差
+
+# 各优化器特定超参数
+optimizer_hyperparams:
+  pso:
+    w: 0.7                   # 惯性权重
+    c1: 1.5                  # 个体学习因子
+    c2: 1.5                  # 社会学习因子
+  sa:
+    temp_init: 100.0         # 初始温度
+    temp_min: 1e-3           # 最小温度
+    alpha: 0.95              # 降温系数
+  de:
+    f: 0.8                   # 缩放因子
+    cr: 0.9                  # 交叉概率
+
