@@ -326,10 +326,6 @@ def main():
     tester.initialize_predictors()
     tester.initialize_optimizers()
     
-    # 执行滚动测试
-    # 参数说明：
-    #   - num_iterations: 滚动次数（10次 = 50分钟）
-    #   - start_offset: 从第几个数据点开始（确保前面有足够的历史数据）
     results = tester.run_rolling_test(
         num_iterations=10,  # 测试10次滚动优化
         start_offset=60     # 从第60个数据点开始（确保有60步历史）

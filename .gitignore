@@ -41,3 +41,6 @@ data/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# models
+checkpoints/

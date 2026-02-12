@@ -10,51 +10,11 @@ MPC 投药优化器（DosingOptimizer）
     BaseOptimizer (optimizers/base_optimizer.py)
     
 主要特点：
-    1. 接收预测器输出的浊度预测作为输入（参考 predictors/base_predictor.py）
+    1. 接收预测器输出的浊度预测作为输入
     2. 基于 MPC 框架进行多步预测优化
     3. 使用智能优化算法求解（PSO/SA/DE，参考 optimizers/optimizer.py）
     4. 考虑约束条件（投矾量上下限、变化率限制）
     5. 输出控制时域内的投矾量控制序列
-
-MPC 控制框架说明：
-    - 预测时域 (Np): 6步（每步5分钟，共30分钟）
-    - 控制时域 (Nc): 5步（输出5个控制动作）
-    - 目标函数: J = Σ||y(t+k) - y_target||² + λ·Σ||Δu(t+k)||²
-      * 第一项：跟踪误差，使出水浊度接近目标值
-      * 第二项：控制变化惩罚，使投矾量变化平稳
-    - 约束条件:
-      * 投矾量范围: [dose_min, dose_max]
-      * 变化率限制: |Δu| ≤ dose_rate_limit
-      
-配置文件：
-    - 配置加载器: utils/config_loader.py
-    - 配置文件: configs/app.yaml
-    
-使用示例：
-    >>> from optimizers.dosing_optimizer import create_dosing_optimizer
-    >>> 
-    >>> # 创建优化器
-    >>> optimizer = create_dosing_optimizer('pool_1')
-    >>> 
-    >>> # 执行优化
-    >>> result = optimizer.optimize(
-    ...     predictions={'pool_1': {
-    ...         '2024-01-01 12:05': 0.95,
-    ...         '2024-01-01 12:10': 0.98,
-    ...         '2024-01-01 12:15': 1.02,
-    ...         '2024-01-01 12:20': 1.05,
-    ...         '2024-01-01 12:25': 1.08,
-    ...         '2024-01-01 12:30': 1.10,
-    ...     }},
-    ...     current_features={'pool_1': {'current_dose': 15.0}},
-    ...     last_datetime=datetime(2024, 1, 1, 12, 0)
-    ... )
-    >>> 
-    >>> # 输出格式: {'pool_1': {'2024-01-01 12:05': 15.5, ...}}
-    >>> print(result)
-
-作者: Water Treatment Optimization System
-日期: 2024
 """
 import numpy as np
 import pandas as pd
@@ -123,7 +83,7 @@ class DosingOptimizer(BaseOptimizer):
         print(f"  - 目标浊度: {self.target_turbidity} NTU")
     
     def _create_optimizer(self):
-        """创建优化器实例（使用 optimizer.py 中的工厂函数）"""
+        """创建优化器实例"""
         # 构建优化器配置字典（传递给 optimizer.py）
         opt_config = {
             'optimizer': {
@@ -290,7 +250,6 @@ class DosingOptimizer(BaseOptimizer):
             )
         
         # 调用优化器求解（optimizer.py 中的方法）
-        # 优化器会自动处理约束条件（dose_min, dose_max, dose_rate_limit）
         optimal_du_sequence, optimal_cost = self.optimizer.optimize(
             objective_func=mpc_objective,
             initial_dose=current_dose
@@ -397,13 +356,6 @@ def create_dosing_optimizer(pool_id: str, config_path: str = None) -> DosingOpti
         
     返回：
         DosingOptimizer 实例
-        
-    使用示例：
-        >>> optimizer = create_dosing_optimizer('pool_1')
-        >>> result = optimizer.optimize(
-        ...     predictions={'pool_1': {'2024-01-01 12:05': 0.95, ...}},
-        ...     current_features={'pool_1': {'current_dose': 15.0}}
-        ... )
     """
     # 加载配置（参考 config_loader.py 和 app.yaml）
     config = load_config(config_path)
@@ -425,13 +377,8 @@ def create_multi_pool_optimizers(
         
     返回：
         优化器字典 {'pool_1': optimizer1, 'pool_2': optimizer2, ...}
-        
-    使用示例：
-        >>> optimizers = create_multi_pool_optimizers(['pool_1', 'pool_2'])
-        >>> for pool_id, optimizer in optimizers.items():
-        ...     result = optimizer.optimize(predictions, current_features)
     """
-    # 只加载一次配置
+    # 加载配置
     config = load_config(config_path)
     
     # 为每个池子创建优化器
