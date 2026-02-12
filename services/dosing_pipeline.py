@@ -100,6 +100,7 @@ class DosingPipeline:
                      last_dt: datetime) -> Dict[str, Dict[str, float]]:
         """
         纯预测功能
+        输入: {"pool_1": ndarray[60, 6], "pool_2": ndarray[60, 6], ...}
         返回: {pool_id: {time: val}} (6个点)
         """
         # 调用预测管理器 (Predictor 内部会处理标准化等)
