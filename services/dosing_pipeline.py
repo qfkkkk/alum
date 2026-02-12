@@ -11,7 +11,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 
 from predictors import create_manager
-from optimizers import create_optimizer
+from optimizers import create_multi_pool_optimizers
 
 class DosingPipeline:
     """
@@ -31,9 +31,13 @@ class DosingPipeline:
         """
         # 初始化预测管理器
         self.predictor_manager = create_manager(config_path)
+        enabled_pools = self.predictor_manager.enabled_pools or ['pool_1']
         
-        # 初始化优化器
-        self.optimizer = create_optimizer(optimizer_type, optimizer_config)
+        # 使用多池优化器工厂创建（参考 tests/test_optimizer_mock.py）
+        self.optimizers = create_multi_pool_optimizers(
+            pool_ids=enabled_pools,
+            config_path=config_path
+        )
         
     def _adapt_input(self, raw_data: Any) -> Dict[str, np.ndarray]:
         """
@@ -62,10 +66,10 @@ class DosingPipeline:
             Dict[pool_id, Dict[feature_name, value]]
         """
         features_dict = {}
-        
+
         # 优先从 config 获取特征列表，这比从 predictor 实例获取更直接
         feature_names = self.predictor_manager.config.get('features', [])
-        
+
         # 如果 config 里也是空的，尝试 fallback 到 predictor 实例
         if not feature_names and self.predictor_manager.predictors:
              first_predictor = next(iter(self.predictor_manager.predictors.values()))
@@ -91,7 +95,24 @@ class DosingPipeline:
                     last_row = {f"feat_{i}": float(val) for i, val in enumerate(last_vals)}
             
             if last_row:
-                features_dict[pool_id] = last_row
+                # 统一为优化器所需的精简特征结构：
+                # current_dose/ph/flow（参考 tests/test_optimizer_mock.py）
+                normalized = {}
+
+                if 'dose' in last_row:
+                    normalized['current_dose'] = float(last_row['dose'])
+                elif 'current_dose' in last_row:
+                    normalized['current_dose'] = float(last_row['current_dose'])
+
+                if 'pH' in last_row:
+                    normalized['ph'] = float(last_row['pH'])
+                elif 'ph' in last_row:
+                    normalized['ph'] = float(last_row['ph'])
+
+                if 'flow' in last_row:
+                    normalized['flow'] = float(last_row['flow'])
+
+                features_dict[pool_id] = normalized
                 
         return features_dict
 
@@ -128,12 +149,30 @@ class DosingPipeline:
             timestamps = [item[0] for item in sorted_items]
             pool_timestamps[pool_id] = timestamps
             
-        # 2. 执行优化 (直接传入带时间戳的 predictions)
-        # BaseOptimizer 接口已更新为接收 Dict[str, Dict[Any, float]]
-        opt_results = self.optimizer.optimize(
-            predictions, 
-            current_features=current_features
-        )
+        # 2. 按池子逐个执行优化（参考 tests/test_optimizer_mock.py）
+        opt_results = {}
+        for pool_id in predictions.keys():
+            optimizer = self.optimizers.get(pool_id)
+            if optimizer is None:
+                continue
+                
+            pool_predictions = {pool_id: predictions[pool_id]}
+            pool_features = None
+            if current_features and pool_id in current_features:
+                normalized_features = dict(current_features[pool_id])
+                if 'current_dose' not in normalized_features and 'dose' in normalized_features:
+                    normalized_features['current_dose'] = float(normalized_features['dose'])
+                pool_features = {pool_id: normalized_features}
+            
+            if not pool_features or pool_features[pool_id].get('current_dose') is None:
+                raise ValueError(f"池子 {pool_id} 缺少 current_dose（当前投矾量）")
+            
+            pool_result = optimizer.optimize(
+                pool_predictions,
+                current_features=pool_features
+            )
+            if pool_id in pool_result:
+                opt_results[pool_id] = pool_result[pool_id]
         
         # 3. 结果映射回时间戳 (取前5个时间点)
         for pool_id, rec_values in opt_results.items():
