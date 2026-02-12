@@ -3,7 +3,7 @@ import unittest
 import json
 import sys
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import numpy as np
 
@@ -32,7 +32,8 @@ class TestDosingAPI(unittest.TestCase):
         pools_cfg = config.get('pools', {})
         self.enabled_pools = [pid for pid, cfg in pools_cfg.items() if cfg.get('enabled', False)] or ['pool_1']
 
-    def _mock_data_read(self):
+    def _mock_read_data(self, config):
+        _ = config
         data_dict = {
             pool_name: self.input_data
             for pool_name in self.enabled_pools
@@ -46,24 +47,20 @@ class TestDosingAPI(unittest.TestCase):
         self.assertEqual(data['status'], 'healthy')
         self.assertEqual(data['service'], 'alum_dosing')
 
-    def test_predict_turbidity(self):
+    def test_predict(self):
         # 使用真实 predict_only，只替换输入数据来源
-        with patch('services.dosing_api.data_read', side_effect=self._mock_data_read):
+        with patch('services.dosing_api.read_data', side_effect=self._mock_read_data):
             response = self.app.post(
-                '/alum_dosing/predict_turbidity',
+                '/alum_dosing/predict',
                 data=json.dumps({}),
                 content_type='application/json'
             )
-        print("======="*10)
-        print("predict_turbidity:\n",response.data)
-        print("======="*10)
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.data)
         self.assertEqual(data['status'], 'success')
         self.assertIn('predictions', data)
         self.assertIn('count', data)
         self.assertIn('timestamp', data)
-        print(f"predict_turbidity count={data['count']}")
         
         # Check first prediction structure
         if data['predictions']:
@@ -73,19 +70,15 @@ class TestDosingAPI(unittest.TestCase):
             if first_pool['forecast']:
                 self.assertIn('datetime', first_pool['forecast'][0])
                 self.assertIn('turbidity_pred', first_pool['forecast'][0])
-                print(f"first forecast sample={first_pool['forecast'][0]}")
 
-    def test_full_optimization(self):
+    def test_optimize(self):
         # 使用真实 full pipeline，只替换输入数据来源
-        with patch('services.dosing_api.data_read', side_effect=self._mock_data_read):
+        with patch('services.dosing_api.read_data', side_effect=self._mock_read_data):
             response = self.app.post(
-                '/alum_dosing/full_optimization',
+                '/alum_dosing/optimize',
                 data=json.dumps({}),
                 content_type='application/json'
             )
-        print("======="*10)
-        print("full_optimization:\n",response.data)
-        print("======="*10)
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.data)
         self.assertEqual(data['status'], 'success')
@@ -96,8 +89,9 @@ class TestDosingAPI(unittest.TestCase):
         if data['results']:
             first_pool = data['results'][0]
             self.assertIn('pool_id', first_pool)
-            self.assertIn('turbidity_predictions', first_pool)
             self.assertIn('recommendations', first_pool)
+            self.assertNotIn('predictions', first_pool)
+            self.assertNotIn('turbidity_predictions', first_pool)
             
             # Check recommendations content
             if first_pool['recommendations']:

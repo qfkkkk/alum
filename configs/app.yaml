@@ -71,3 +71,11 @@ optimizer_hyperparams:
     f: 0.8                   # 缩放因子
     cr: 0.9                  # 交叉概率
 
+# 调度器配置
+scheduler:
+  enabled: true
+  auto_start: true
+  frequency:
+    type: hourly
+    interval_hours: 1
+    minute: 5

@@ -1,288 +1,468 @@
 # -*- encoding: utf-8 -*-
 """
-投药优化定时调度服务
-功能：同时提供API服务和=
+投药优化定时调度服务。
 
-特性：
-    - 每小时自动执行一次完整优化流程
-    - 自动将优化结果写回IoT平台
-    - 同时提供API供手动触发
-    - 支持调度器启停控制
+职责：
+    1. 周期性执行 data_read -> pipeline.run
+    2. 保存最近一次任务执行结果
+    3. 提供调度器状态/启停/最新结果 API
 
-路由列表（除dosing_api中的路由外，额外增加）：
-    GET  /alum_dosing/scheduler/status  - 调度器状态
-    POST /alum_dosing/scheduler/start   - 启动调度器
-    POST /alum_dosing/scheduler/stop    - 停止调度器
-    GET  /alum_dosing/latest_result     - 最新结果
+说明：
+    - upload_recommend_message 暂未实现，当前版本仅记录 upload_skipped 日志。
+    - 调度频率从 configs/app.yaml 的 scheduler 段读取，非法值回退到默认值。
 """
+
 import threading
 import time
 import traceback
-from datetime import datetime
-from pathlib import Path
+from datetime import datetime, timedelta
+from typing import Any, Dict, Optional, Tuple
 
-import pandas as pd
-import schedule
-from flask import Flask, jsonify, request
+from flask import jsonify
 
-from .dosing_pipeline import DosingPipeline
-from .dosing_api import app, data_read, get_pipeline
-
-# 复用data模块
-import sys
-sys.path.append(str(Path(__file__).parent.parent.parent.parent))
-from data.data_factory import upload_recommend_message
+from .dosing_api import app, get_pipeline
+from .io_adapter import read_data, upload_recommend_message
+from utils.config_loader import load_config
 from utils.logger import Logger
 
+try:
+    import schedule  # type: ignore
+except ImportError:
+    class _SimpleJob:
+        def __init__(self, interval_hours: int, minute: int, job_func):
+            self.interval_hours = interval_hours
+            self.minute = minute
+            self.job_func = job_func
+            self.tags = set()
+            self.next_run = self._compute_next_run(datetime.now())
+
+        def _compute_next_run(self, now: datetime) -> datetime:
+            candidate = now.replace(minute=self.minute, second=0, microsecond=0)
+            if candidate <= now:
+                candidate += timedelta(hours=1)
+
+            if self.interval_hours > 1:
+                mod = candidate.hour % self.interval_hours
+                if mod != 0:
+                    candidate += timedelta(hours=(self.interval_hours - mod))
+            return candidate
+
+        def should_run(self, now: datetime) -> bool:
+            return now >= self.next_run
+
+        def run(self):
+            self.job_func()
+            self.next_run = self.next_run + timedelta(hours=self.interval_hours)
+
+        def tag(self, *tags):
+            self.tags.update(tags)
+            return self
+
+    class _SimpleEvery:
+        def __init__(self, scheduler, interval):
+            self._scheduler = scheduler
+            self._interval = interval
+            self._minute = 0
+
+        @property
+        def hours(self):
+            return self
+
+        def at(self, minute_str: str):
+            try:
+                self._minute = int(str(minute_str).strip().replace(":", ""))
+            except ValueError:
+                self._minute = 0
+            return self
+
+        def do(self, job_func):
+            job = _SimpleJob(self._interval, self._minute, job_func)
+            self._scheduler.jobs.append(job)
+            return job
+
+    class _SimpleSchedule:
+        def __init__(self):
+            self.jobs = []
+
+        def every(self, interval=1):
+            return _SimpleEvery(self, interval)
+
+        def clear(self, tag=None):
+            if tag is None:
+                self.jobs = []
+            else:
+                self.jobs = [job for job in self.jobs if tag not in job.tags]
+
+        def get_jobs(self, tag=None):
+            if tag is None:
+                return list(self.jobs)
+            return [job for job in self.jobs if tag in job.tags]
+
+        def run_pending(self):
+            now = datetime.now()
+            for job in list(self.jobs):
+                if job.should_run(now):
+                    job.run()
+
+    schedule = _SimpleSchedule()
+
 # 全局配置
-time_format = '%Y-%m-%d %H:%M:%S'
+time_format = "%Y-%m-%d %H:%M:%S"
 logger = Logger()
 
+SCHEDULER_TAG = "alum_dosing_scheduler"
+
+DEFAULT_SCHEDULER_SETTINGS = {
+    "enabled": True,
+    "auto_start": True,
+    "frequency": {
+        "type": "hourly",
+        "interval_hours": 1,
+        "minute": 5,
+    },
+}
+
 # 调度器状态
-scheduler_running = False
-scheduler_thread = None
-latest_result = None
+state_lock = threading.Lock()
 result_lock = threading.Lock()
+scheduler_running = False
+scheduler_thread: Optional[threading.Thread] = None
+latest_result: Optional[Dict[str, Any]] = None
+scheduler_settings: Dict[str, Any] = DEFAULT_SCHEDULER_SETTINGS.copy()
+
+
+def _now_str() -> str:
+    return datetime.now().strftime(time_format)
+
+
+def _sanitize_scheduler_settings(raw_scheduler: Dict[str, Any]) -> Dict[str, Any]:
+    """校验并规范 scheduler 配置，非法值回退默认值。"""
+    settings = {
+        "enabled": DEFAULT_SCHEDULER_SETTINGS["enabled"],
+        "auto_start": DEFAULT_SCHEDULER_SETTINGS["auto_start"],
+        "frequency": DEFAULT_SCHEDULER_SETTINGS["frequency"].copy(),
+    }
+
+    if not isinstance(raw_scheduler, dict):
+        logger.warning("[Scheduler] 配置类型非法，使用默认配置")
+        return settings
+
+    settings["enabled"] = bool(raw_scheduler.get("enabled", settings["enabled"]))
+    settings["auto_start"] = bool(raw_scheduler.get("auto_start", settings["auto_start"]))
+
+    raw_frequency = raw_scheduler.get("frequency", {})
+    if not isinstance(raw_frequency, dict):
+        logger.warning("[Scheduler] frequency 配置非法，回退默认 1h@05")
+        return settings
+
+    frequency_type = str(raw_frequency.get("type", "hourly")).lower()
+    if frequency_type != "hourly":
+        logger.warning("[Scheduler] 仅支持 hourly，回退默认 1h@05")
+        return settings
+
+    try:
+        interval_hours = int(raw_frequency.get("interval_hours", 1))
+    except (TypeError, ValueError):
+        interval_hours = 1
+    if interval_hours < 1:
+        logger.warning("[Scheduler] interval_hours 必须 >= 1，回退默认 1")
+        interval_hours = 1
+
+    try:
+        minute = int(raw_frequency.get("minute", 5))
+    except (TypeError, ValueError):
+        minute = 5
+    if minute < 0 or minute > 59:
+        logger.warning("[Scheduler] minute 必须在 [0, 59]，回退默认 5")
+        minute = 5
+
+    settings["frequency"] = {
+        "type": "hourly",
+        "interval_hours": interval_hours,
+        "minute": minute,
+    }
+    return settings
+
+
+def _refresh_scheduler_settings() -> Dict[str, Any]:
+    """从 app.yaml 读取 scheduler 配置并缓存。"""
+    global scheduler_settings
+
+    config = load_config()
+    raw_scheduler = config.get("scheduler", {})
+    scheduler_settings = _sanitize_scheduler_settings(raw_scheduler)
+    return scheduler_settings
+
+
+def _register_scheduler_job() -> None:
+    """注册定时任务（按 tag 清理，避免误清理其他调度任务）。"""
+    settings = scheduler_settings
+    frequency = settings["frequency"]
+    interval_hours = frequency["interval_hours"]
+    minute = frequency["minute"]
+
+    schedule.clear(SCHEDULER_TAG)
+    schedule.every(interval_hours).hours.at(f":{minute:02d}").do(scheduled_optimization_job).tag(SCHEDULER_TAG)
+    logger.info(
+        f"[调度器] 已注册任务: type=hourly interval_hours={interval_hours} minute={minute}"
+    )
+
+
+def _get_next_run_at() -> Optional[str]:
+    jobs = schedule.get_jobs(SCHEDULER_TAG)
+    if not jobs:
+        return None
+    next_run = jobs[0].next_run
+    if next_run is None:
+        return None
+    return next_run.strftime(time_format)
+
+
+def _save_latest_result(payload: Dict[str, Any]) -> None:
+    global latest_result
+    with result_lock:
+        latest_result = payload
 
 
 def scheduled_optimization_job():
     """
-    定时优化任务
-    
-    功能：
-        1. 读取最新数据
-        2. 预测未来5个时间点的出水浊度
-        3. 计算最优投药量
-        4. 将结果写回IoT平台
-        5. 保存结果到内存（供API查询）
-    
-    触发方式：
-        由schedule库每小时自动调用
+    执行一次调度任务。
+
+    流程：
+        1. data_read() 读取输入
+        2. pipeline.run(data_dict, last_dt)
+        3. upload 步骤占位（仅日志）
+        4. 更新 latest_result
     """
-    global latest_result
-    
+    start_ts = time.time()
+    logger.info(f"[定时任务] 开始执行 - {_now_str()}")
+
     try:
-        logger.info(f"[定时任务] 执行投药优化 - {datetime.now().strftime(time_format)}")
-        
-        # 1. 读取数据
-        data = data_read()
-        if data is None or data.empty:
-            logger.error("[定时任务] 数据读取失败")
-            return
-        
-        # 2. 获取当前流量（从数据中提取最新值）
-        # current_flow = data['flow'].iloc[-1]
-        current_flow = 1000  # 占位
-        
-        # 3. 执行完整流程
         pipeline = get_pipeline()
-        result = pipeline.run(data, current_flow=current_flow)
-        
-        # 4. 写回平台
-        if result.get('status') == 'success':
-            upload_recommend_message({
-                "WSPS_ALG_OUT": {
-                    "Optimal_Dosing": str(result['dosing_result']['optimal_dosing']),
-                    "Turbidity_Forecast": str(result['turbidity_predictions'].to_dict())
-                }
-            })
-            logger.info(f"[定时任务] 结果已写回平台")
-        
-        # 5. 保存到内存
-        with result_lock:
-            latest_result = {
-                **result,
-                'executed_at': datetime.now().strftime(time_format)
-            }
-        
-        logger.info("[定时任务] 优化任务执行成功")
-        
-    except Exception as e:
-        error_msg = traceback.format_exc()
-        logger.error(f"[定时任务] 执行失败: {str(e)}\n{error_msg}")
+        config = pipeline.predictor_manager.config
+        payload = read_data(config)
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            raise ValueError("read_data() 必须返回 (data_dict, last_dt)")
 
+        data_dict, last_dt = payload
+        if not isinstance(data_dict, dict) or not data_dict:
+            raise ValueError("read_data() 返回的 data_dict 非法或为空")
 
-def start_scheduler(interval_minutes: int = 60):
-    """
-    启动定时调度器
-    
-    参数：
-        interval_minutes: 执行间隔（分钟），默认60分钟
-    
-    说明：
-        在后台线程中运行调度循环
-    """
-    global scheduler_running, scheduler_thread
-    
-    if scheduler_running:
-        logger.warning("[调度器] 已在运行中")
-        return False
-    
-    # 配置定时任务
-    schedule.clear()
-    schedule.every().hour.at(":05").do(scheduled_optimization_job)
-    
-    # 启动调度器线程
-    scheduler_running = True
-    scheduler_thread = threading.Thread(target=_run_scheduler_loop, daemon=True)
-    scheduler_thread.start()
-    
-    logger.info(f"[调度器] 已启动，间隔: {interval_minutes}分钟")
-    return True
+        result = pipeline.run(data_dict, last_dt)
+
+        duration_ms = int((time.time() - start_ts) * 1000)
+        pool_count = len(result) if isinstance(result, dict) else 0
+
+        upload_result = upload_recommend_message(result if isinstance(result, dict) else {})
+        upload_skipped = bool(upload_result.get("skipped", True))
+
+        latest_payload = {
+            "status": "success",
+            "executed_at": _now_str(),
+            "duration_ms": duration_ms,
+            "upload_skipped": upload_skipped,
+            "pool_count": pool_count,
+            "result": result,
+        }
+        _save_latest_result(latest_payload)
+
+        logger.info(
+            f"[定时任务] 执行成功: duration_ms={duration_ms}, pool_count={pool_count}, upload_skipped={upload_skipped}"
+        )
+    except Exception as exc:
+        duration_ms = int((time.time() - start_ts) * 1000)
+        error_traceback = traceback.format_exc()
+        latest_payload = {
+            "status": "error",
+            "executed_at": _now_str(),
+            "duration_ms": duration_ms,
+            "upload_skipped": True,
+            "pool_count": 0,
+            "error": str(exc),
+            "traceback": error_traceback,
+        }
+        _save_latest_result(latest_payload)
+        logger.error(f"[定时任务] 执行失败: {exc}\n{error_traceback}")
 
 
 def _run_scheduler_loop():
-    """调度器主循环"""
-    global scheduler_running
-    while scheduler_running:
-        schedule.run_pending()
-        time.sleep(10)
+    """调度器后台循环。"""
+    while True:
+        with state_lock:
+            if not scheduler_running:
+                break
+
+        try:
+            schedule.run_pending()
+        except Exception:
+            logger.error(f"[调度器] run_pending 异常:\n{traceback.format_exc()}")
+
+        time.sleep(1)
 
 
-def stop_scheduler():
-    """停止定时调度器"""
-    global scheduler_running
-    scheduler_running = False
-    schedule.clear()
+def start_scheduler(interval_minutes: Optional[int] = None) -> Tuple[bool, str]:
+    """启动调度器。返回 (success, reason)。"""
+    global scheduler_running, scheduler_thread
+
+    if interval_minutes is not None:
+        logger.warning("[调度器] interval_minutes 参数已废弃，当前由配置文件 scheduler.frequency 控制")
+
+    with state_lock:
+        if scheduler_running:
+            return False, "already_running"
+
+        settings = _refresh_scheduler_settings()
+        if not settings.get("enabled", True):
+            logger.warning("[调度器] 已禁用（scheduler.enabled=false）")
+            return False, "disabled"
+
+        _register_scheduler_job()
+
+        scheduler_running = True
+        scheduler_thread = threading.Thread(target=_run_scheduler_loop, daemon=True)
+        scheduler_thread.start()
+
+    logger.info("[调度器] 已启动")
+    return True, "started"
+
+
+def stop_scheduler() -> Tuple[bool, str]:
+    """停止调度器（幂等）。返回 (success, reason)。"""
+    global scheduler_running, scheduler_thread
+
+    with state_lock:
+        if not scheduler_running:
+            schedule.clear(SCHEDULER_TAG)
+            return True, "already_stopped"
+
+        scheduler_running = False
+        local_thread = scheduler_thread
+        scheduler_thread = None
+        schedule.clear(SCHEDULER_TAG)
+
+    if local_thread is not None and local_thread.is_alive():
+        local_thread.join(timeout=2)
+
     logger.info("[调度器] 已停止")
-    return True
+    return True, "stopped"
 
 
-def run_flask_app_non_blocking(host: str = '0.0.0.0', port: int = 5002):
-    """
-    非阻塞模式启动Flask
-    
-    参数：
-        host: 监听地址
-        port: 监听端口
-    
-    返回：
-        threading.Thread: Flask服务线程
-    """
+def run_flask_app_non_blocking(host: str = "0.0.0.0", port: int = 5002):
+    """在后台线程启动 Flask API。"""
+
     def flask_thread_func():
         app.run(host=host, port=port, debug=False, use_reloader=False)
-    
+
     flask_thread = threading.Thread(target=flask_thread_func, daemon=True)
     flask_thread.start()
     logger.info(f"[API] Flask服务线程已启动 @ {host}:{port}")
     return flask_thread
 
 
-# ==================== 调度器管理API路由 ====================
-
-@app.route('/alum_dosing/scheduler/status', methods=['GET'])
+@app.route("/alum_dosing/scheduler/status", methods=["GET"])
 def scheduler_status_api():
-    """
-    获取调度器状态
-    
-    返回：
-        {
-            "scheduler_running": true/false,
-            "has_latest_result": true/false,
-            "last_executed_at": "...",
-            "timestamp": "..."
-        }
-    """
+    """获取调度器状态。"""
+    with state_lock:
+        running = scheduler_running
+
     status = {
-        'scheduler_running': scheduler_running,
-        'timestamp': datetime.now().strftime(time_format)
+        "scheduler_running": running,
+        "timestamp": _now_str(),
+        "next_run_at": _get_next_run_at(),
     }
-    
+
     with result_lock:
         if latest_result is not None:
-            status['has_latest_result'] = True
-            status['last_executed_at'] = latest_result.get('executed_at')
+            status["has_latest_result"] = True
+            status["last_executed_at"] = latest_result.get("executed_at")
         else:
-            status['has_latest_result'] = False
-    
+            status["has_latest_result"] = False
+
     return jsonify(status)
 
 
-@app.route('/alum_dosing/scheduler/start', methods=['POST'])
+@app.route("/alum_dosing/scheduler/start", methods=["POST"])
 def start_scheduler_api():
-    """启动调度器"""
-    success = start_scheduler()
-    return jsonify({
-        'status': 'success' if success else 'already_running',
-        'message': '调度器已启动' if success else '调度器已在运行中',
-        'timestamp': datetime.now().strftime(time_format)
-    })
+    """启动调度器。"""
+    success, reason = start_scheduler()
+    if success:
+        status = "success"
+        message = "调度器已启动"
+    elif reason == "already_running":
+        status = "already_running"
+        message = "调度器已在运行中"
+    elif reason == "disabled":
+        status = "disabled"
+        message = "调度器已禁用（scheduler.enabled=false）"
+    else:
+        status = "error"
+        message = "调度器启动失败"
+
+    return jsonify({"status": status, "message": message, "timestamp": _now_str()})
 
 
-@app.route('/alum_dosing/scheduler/stop', methods=['POST'])
+@app.route("/alum_dosing/scheduler/stop", methods=["POST"])
 def stop_scheduler_api():
-    """停止调度器"""
-    success = stop_scheduler()
-    return jsonify({
-        'status': 'success',
-        'message': '调度器已停止',
-        'timestamp': datetime.now().strftime(time_format)
-    })
+    """停止调度器（幂等）。"""
+    success, reason = stop_scheduler()
+    if reason == "already_stopped":
+        message = "调度器未运行（已是停止状态）"
+    else:
+        message = "调度器已停止"
+
+    return jsonify(
+        {
+            "status": "success" if success else "error",
+            "message": message,
+            "timestamp": _now_str(),
+        }
+    )
 
 
-@app.route('/alum_dosing/latest_result', methods=['GET'])
+@app.route("/alum_dosing/latest_result", methods=["GET"])
 def get_latest_result_api():
-    """
-    获取最新优化结果
-    
-    返回：
-        定时任务最近一次执行的完整结果
-    """
+    """获取最近一次调度结果。"""
     with result_lock:
         if latest_result is None:
-            return jsonify({
-                'status': 'no_result',
-                'message': '暂无执行结果',
-                'timestamp': datetime.now().strftime(time_format)
-            })
-        
-        return jsonify({
-            'status': 'success',
-            'result': latest_result,
-            'timestamp': datetime.now().strftime(time_format)
-        })
+            return jsonify(
+                {
+                    "status": "no_result",
+                    "message": "暂无执行结果",
+                    "timestamp": _now_str(),
+                }
+            )
+        result = latest_result
 
+    return jsonify({"status": "success", "result": result, "timestamp": _now_str()})
 
-# ==================== 主函数 ====================
 
 def main():
-    """
-    主函数：同时启动API服务和定时调度器
-    
-    运行模式：
-        1. 启动定时调度器（后台线程）
-        2. 启动Flask API服务（后台线程）
-        3. 主线程保持运行
-    
-    使用方式：
-        python -m modules.alum_dosing.services.dosing_scheduler
-    """
+    """启动调度服务（API + Scheduler）。"""
     try:
         logger.info("=" * 60)
         logger.info("投药优化服务启动")
         logger.info("模式：触发式API + 定时任务")
-        logger.info(f"启动时间：{datetime.now().strftime(time_format)}")
+        logger.info(f"启动时间：{_now_str()}")
         logger.info("=" * 60)
-        
-        # 启动调度器
-        start_scheduler()
-        
-        # 启动API服务（非阻塞）
+
+        settings = _refresh_scheduler_settings()
+        if settings.get("enabled", True) and settings.get("auto_start", True):
+            start_scheduler()
+        else:
+            logger.info("[调度器] 自动启动已关闭")
+
         flask_thread = run_flask_app_non_blocking()
-        
-        # 主线程保持运行
-        try:
-            while True:
-                if not flask_thread.is_alive():
-                    logger.error("Flask服务已停止")
-                    break
-                time.sleep(5)
-        except KeyboardInterrupt:
-            logger.info("收到中断信号，停止服务...")
-            stop_scheduler()
-            
-    except Exception as e:
-        logger.error(f"服务启动失败: {str(e)}")
+
+        while True:
+            if not flask_thread.is_alive():
+                logger.error("Flask服务已停止")
+                break
+            time.sleep(5)
+    except KeyboardInterrupt:
+        logger.info("收到中断信号，停止服务...")
+    except Exception as exc:
+        logger.error(f"服务启动失败: {exc}\n{traceback.format_exc()}")
+    finally:
         stop_scheduler()
 
 
