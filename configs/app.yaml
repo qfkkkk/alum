@@ -21,7 +21,6 @@ features:
   - temp_shuimian
 target_feature: "turb_chushui"
 target_feature_idx: 1  # turb_chushui 在 features 列表中的索引
-
 # 池子配置
 pools:
   pool_1:
