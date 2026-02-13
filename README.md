@@ -80,17 +80,13 @@ python -m services.run_dosing_service status
 ### 3.1 预测器接口
 
 ```bash
-curl -X POST "http://127.0.0.1:5001/alum_dosing/predict" \
-  -H "Content-Type: application/json" \
-  -d '{}'
+curl -X GET "http://127.0.0.1:5001/alum_dosing/predict"
 ```
 
 ### 3.2 优化器接口
 
 ```bash
-curl -X POST "http://127.0.0.1:5001/alum_dosing/optimize" \
-  -H "Content-Type: application/json" \
-  -d '{}'
+curl -X GET "http://127.0.0.1:5001/alum_dosing/optimize"
 ```
 
 ## 4. 常用状态接口
@@ -223,9 +219,20 @@ curl -X GET "http://127.0.0.1:5001/alum_dosing/health"
 请求：
 
 ```bash
+# GET：内部读取实时数据后预测
+curl -X GET "http://127.0.0.1:5001/alum_dosing/predict"
+```
+
+```bash
+# POST：接收外部输入数据后预测
 curl -X POST "http://127.0.0.1:5001/alum_dosing/predict" \
   -H "Content-Type: application/json" \
-  -d '{}'
+  -d '{
+    "last_dt": "2026-02-13 12:00:00",
+    "data_dict": {
+      "pool_1": [[1.0, 2.0], [3.0, 4.0]]
+    }
+  }'
 ```
 
 成功响应示例：
@@ -260,9 +267,29 @@ curl -X POST "http://127.0.0.1:5001/alum_dosing/predict" \
 请求：
 
 ```bash
+# GET：内部读取实时数据，执行“预测+优化”全流程
+curl -X GET "http://127.0.0.1:5001/alum_dosing/optimize"
+```
+
+```bash
+# POST：接收预测结果 + 当前特征，仅执行优化
 curl -X POST "http://127.0.0.1:5001/alum_dosing/optimize" \
   -H "Content-Type: application/json" \
-  -d '{}'
+  -d '{
+    "predictions": {
+      "pool_1": {
+        "2026-02-13 12:05:00": 1.11,
+        "2026-02-13 12:10:00": 1.15
+      }
+    },
+    "current_features": {
+      "pool_1": {
+        "current_dose": 10.0,
+        "ph": 7.1,
+        "flow": 1200
+      }
+    }
+  }'
 ```
 
 成功响应示例：
