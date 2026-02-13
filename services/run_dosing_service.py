@@ -47,7 +47,7 @@ def run_scheduler_only():
 
 
 def show_status():
-    url = "http://localhost:5002/alum_dosing/scheduler/status"
+    url = "http://localhost:5001/alum_dosing/scheduler/status"
     try:
         with urllib.request.urlopen(url, timeout=5) as response:
             payload = response.read().decode("utf-8")
