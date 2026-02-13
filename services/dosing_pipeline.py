@@ -7,7 +7,7 @@
 
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any
 from datetime import datetime
 
 from predictors import create_manager
@@ -192,6 +192,9 @@ class DosingPipeline:
             last_dt: datetime) -> Dict[str, Any]:
         """
         全流程执行：适配 -> 预测 + 提取特征 -> 优化
+
+        返回：
+            仅返回优化阶段结果，不包含 predictions/generated_at。
         """
         results = {}
         
@@ -210,13 +213,11 @@ class DosingPipeline:
             current_features=current_features
         )
         
-        # 5. 组装最终结果
+        # 5. 组装最终结果（仅保留优化输出）
         for pool_id in predictions.keys():
             pool_res = {
                 'status': 'success',
-                'predictions': predictions[pool_id],
                 'recommendations': recommendations.get(pool_id, {}),
-                'generated_at': datetime.now().isoformat()
             }
             results[pool_id] = pool_res
             
