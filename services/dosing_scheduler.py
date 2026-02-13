@@ -66,7 +66,7 @@ def _default_fallback_minute_by_task(task_names: Tuple[str, ...]) -> Dict[str, i
     return minute_map
 
 
-def _default_frequency(default_minute: int) -> Dict[str, int]:
+def _default_frequency(default_minute: int) -> Dict[str, Any]:
     return {"type": "hourly", "interval_hours": 1, "minute": default_minute}
 
 
@@ -131,15 +131,25 @@ def _sanitize_frequency(
     raw_frequency: Any,
     warn_prefix: str,
     default_minute: int,
-) -> Dict[str, int]:
+) -> Dict[str, Any]:
     frequency = dict(_default_frequency(default_minute))
     if not isinstance(raw_frequency, dict):
         logger.warning(f"{warn_prefix} frequency 配置非法，回退默认")
         return frequency
 
-    frequency_type = str(raw_frequency.get("type", "hourly")).lower()
+    frequency_type = str(raw_frequency.get("type", "hourly")).lower().strip()
+    if frequency_type in ("seconds", "secondly"):
+        try:
+            interval_seconds = int(raw_frequency.get("interval_seconds", 10))
+        except (TypeError, ValueError):
+            interval_seconds = 10
+        if interval_seconds < 1:
+            logger.warning(f"{warn_prefix} interval_seconds 必须 >= 1，回退默认 10s")
+            interval_seconds = 10
+        return {"type": "seconds", "interval_seconds": interval_seconds}
+
     if frequency_type != "hourly":
-        logger.warning(f"{warn_prefix} 仅支持 hourly，回退默认")
+        logger.warning(f"{warn_prefix} 仅支持 hourly/seconds，回退默认")
         return frequency
 
     try:
@@ -222,10 +232,29 @@ def _refresh_scheduler_settings() -> Dict[str, Any]:
     return scheduler_settings
 
 
-def _register_task_job(tag: str, task_name: str, frequency: Dict[str, int], job_func) -> None:
-    interval_hours = frequency["interval_hours"]
-    minute = frequency["minute"]
+def _register_task_job(tag: str, task_name: str, frequency: Dict[str, Any], job_func) -> None:
     schedule.clear(tag)
+    frequency_type = str(frequency.get("type", "hourly")).lower().strip()
+
+    if frequency_type == "seconds":
+        try:
+            interval_seconds = int(frequency.get("interval_seconds", 10))
+        except (TypeError, ValueError):
+            interval_seconds = 10
+        if interval_seconds < 1:
+            interval_seconds = 10
+        schedule.every(interval_seconds).seconds.do(job_func).tag(tag)
+        logger.info(
+            f"[调度器] 已注册任务: task={task_name} type=seconds interval_seconds={interval_seconds}"
+        )
+        return
+
+    interval_hours = int(frequency.get("interval_hours", 1))
+    minute = int(frequency.get("minute", 0))
+    if interval_hours < 1:
+        interval_hours = 1
+    if minute < 0 or minute > 59:
+        minute = 0
     schedule.every(interval_hours).hours.at(f":{minute:02d}").do(job_func).tag(tag)
     logger.info(
         f"[调度器] 已注册任务: task={task_name} type=hourly interval_hours={interval_hours} minute={minute}"
