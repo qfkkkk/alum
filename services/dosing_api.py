@@ -11,10 +11,11 @@
 import traceback
 from datetime import datetime
 
-from flask import Flask, jsonify
+from flask import Flask
 
 from .dosing_pipeline import DosingPipeline
 from .io_adapter import read_data
+from .response import error_response, ok_response
 from utils.logger import Logger
 
 # 全局配置
@@ -38,12 +39,9 @@ def get_pipeline() -> DosingPipeline:
 
 @app.route("/alum_dosing/health", methods=["GET"])
 def health_check():
-    return jsonify(
-        {
-            "status": "healthy",
-            "service": "alum_dosing",
-            "timestamp": datetime.now().strftime(time_format),
-        }
+    return ok_response(
+        data={"service": "alum_dosing", "health": "healthy"},
+        message="healthy",
     )
 
 
@@ -72,17 +70,23 @@ def predict_api():
             formatted_preds.append(pool_data)
             count += len(time_dict)
 
-        return jsonify(
-            {
-                "status": "success",
-                "predictions": formatted_preds,
-                "count": count,
-                "timestamp": last_dt.strftime(time_format),
+        return ok_response(
+            data={
+                "task": "predict",
+                "executed_at": last_dt.strftime(time_format),
+                "pool_count": len(formatted_preds),
+                "point_count": count,
+                "pools": formatted_preds,
             }
         )
     except Exception as exc:
         logger.error(f"预测接口异常: {traceback.format_exc()}")
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        return error_response(
+            code="PREDICT_API_ERROR",
+            message="预测接口执行失败",
+            detail=str(exc),
+            status_code=500,
+        )
 
 
 @app.route("/alum_dosing/optimize", methods=["POST"])
@@ -100,11 +104,12 @@ def optimize_api():
         results = pipeline.run(data_dict, last_dt)
 
         formatted_results = []
+        point_count = 0
         for pool_id, res in results.items():
             pool_data = {
                 "pool_id": pool_id,
                 "status": res.get("status", "success"),
-                "generated_at": res.get("generated_at"),
+                "executed_at": last_dt.strftime(time_format),
                 "recommendations": [],
             }
 
@@ -114,19 +119,27 @@ def optimize_api():
                 pool_data["recommendations"] = [
                     {"datetime": k, "value": round(float(v), 2)} for k, v in sorted_recs
                 ]
+                point_count += len(sorted_recs)
 
             formatted_results.append(pool_data)
 
-        return jsonify(
-            {
-                "status": "success",
-                "results": formatted_results,
-                "timestamp": last_dt.strftime(time_format),
+        return ok_response(
+            data={
+                "task": "optimize",
+                "executed_at": last_dt.strftime(time_format),
+                "pool_count": len(formatted_results),
+                "point_count": point_count,
+                "pools": formatted_results,
             }
         )
     except Exception as exc:
         logger.error(f"优化接口异常: {traceback.format_exc()}")
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        return error_response(
+            code="OPTIMIZE_API_ERROR",
+            message="优化接口执行失败",
+            detail=str(exc),
+            status_code=500,
+        )
 
 
 def run_flask_app(host: str = "0.0.0.0", port: int = 5002):
