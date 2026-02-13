@@ -75,7 +75,16 @@ optimizer_hyperparams:
 scheduler:
   enabled: true
   auto_start: true
-  frequency:
-    type: hourly
-    interval_hours: 1
-    minute: 5
+  tasks:
+    predict:
+      enabled: true
+      frequency:
+        type: hourly
+        interval_hours: 1
+        minute: 0
+    optimize:
+      enabled: true
+      frequency:
+        type: hourly
+        interval_hours: 1
+        minute: 5
