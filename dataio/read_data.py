@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Any
 from datetime import datetime
 import re
 
@@ -13,11 +13,15 @@ if str(_root) not in sys.path:
 from dataio.data_factory import load_agg_data
 from utils.config_loader import load_alum_config
 
+
 def read_data(
     model_name: str = 'optimized_dose',
     config_file: str = 'configs/alum_dosing.yaml',
     num_pools: int = 4,
     debug: bool = False,
+    mode: str = 'remote',
+    app_config: Dict[str, Any] = None,
+    seed: int = None,
 ) -> Tuple[Dict[str, np.ndarray], datetime]:
     """
     读取聚合数据并按池子分组转换为字典格式
@@ -28,18 +32,53 @@ def read_data(
                    - 'optimized_dose': 投加药耗优化模型（默认）
         config_file: 配置文件路径
         num_pools: 池子数量，默认为4
+        mode: 数据模式，'remote' 或 'local'
     
     返回：
         Tuple[Dict[str, np.ndarray], datetime]：
         - 第一个元素：Dict[str, np.ndarray]
           - key: "pool_1", "pool_2", "pool_3", "pool_4"
-          - value: shape为 (n_timesteps, 6) 的数组
-          - 6个特征列的固定顺序：dose, turb_chushui, turb_jinshui, flow, pH, temp_shuimian
+          - value: shape为 (n_timesteps, n_features) 的数组
         - 第二个元素：datetime，数据的最后时间点
-    
-    Example:
-        输出: ({"pool_1": ndarray[60, 6], "pool_2": ndarray[60, 6], ...}, datetime(2026, 2, 12, 10, 30, 0))
     """
+    mode_norm = str(mode or 'remote').strip().lower()
+
+    if mode_norm == 'local':
+        cfg = app_config or {}
+        seq_len = int(cfg.get('seq_len', 60))
+        feature_order = cfg.get('features', ['dose', 'turb_chushui', 'turb_jinshui', 'flow', 'pH', 'temp_shuimian'])
+
+        pools_cfg = cfg.get('pools', {})
+        enabled_pools = [pid for pid, p_cfg in pools_cfg.items() if p_cfg.get('enabled', False)]
+        if not enabled_pools:
+            enabled_pools = [f'pool_{i}' for i in range(1, num_pools + 1)]
+
+        rng = np.random.default_rng(seed)
+        local_result: Dict[str, np.ndarray] = {}
+        for pool_name in enabled_pools:
+            pool_data_list = []
+            for feature_name in feature_order:
+                if feature_name == 'dose':
+                    values = rng.uniform(5.0, 30.0, size=seq_len)
+                elif feature_name in ('pH', 'ph'):
+                    values = rng.uniform(6.8, 7.6, size=seq_len)
+                elif feature_name == 'flow':
+                    values = rng.uniform(1500.0, 3000.0, size=seq_len)
+                elif feature_name in ('turb_chushui', 'turb_jinshui'):
+                    values = rng.uniform(0.1, 8.0, size=seq_len)
+                elif feature_name == 'temp_shuimian':
+                    values = rng.uniform(10.0, 30.0, size=seq_len)
+                else:
+                    values = rng.uniform(0.0, 1.0, size=seq_len)
+                pool_data_list.append(values)
+
+            local_result[pool_name] = np.column_stack(pool_data_list).astype(np.float32)
+
+        if debug:
+            print(f"[read_data][local] pools={list(local_result.keys())}, seq_len={seq_len}, n_features={len(feature_order)}")
+
+        return local_result, datetime.now()
+
     # 加载配置文件
     print(f"加载配置文件: {config_file}")
     config = load_alum_config(config_file)
@@ -66,6 +105,8 @@ def read_data(
     if data is not None and not data.empty:
         # 重命名列
         data = data.rename(columns=column_mapping)
+    else:
+        raise ValueError("远程读数为空，无法构建模型输入")
     
     # 固定的特征顺序
     FEATURE_ORDER = ['dose', 'turb_chushui', 'turb_jinshui', 'flow', 'pH', 'temp_shuimian']
