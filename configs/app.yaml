@@ -85,15 +85,13 @@ scheduler:
     predict:
       enabled: true          # 是否启用 predict 任务
       frequency:
-        type: hourly         # 调度类型：hourly（小时级）/ seconds（秒级联调用）
-        interval_hours: 1    # type=hourly 时生效：每隔 N 小时执行一次
-        minute: 0            # type=hourly 时生效：在每小时的第几分钟触发（0-59）
+        type: seconds        # 调度类型：hourly（小时级）/ seconds（秒级联调用）
+        interval_seconds: 10 # type=seconds 时生效：每隔 N 秒执行一次
     optimize:
       enabled: true          # 是否启用 optimize 任务
       frequency:
-        type: hourly         # 调度类型：hourly（小时级）/ seconds（秒级联调用）
-        interval_hours: 1    # type=hourly 时生效：每隔 N 小时执行一次
-        minute: 5            # type=hourly 时生效：在每小时的第几分钟触发（0-59）
+        type: seconds        # 调度类型：hourly（小时级）/ seconds（秒级联调用）
+        interval_seconds: 15 # type=seconds 时生效：每隔 N 秒执行一次
 
 # 数据 IO 配置
 dataio:
