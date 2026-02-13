@@ -73,27 +73,27 @@ optimizer_hyperparams:
 
 # 调度器配置
 scheduler:
-  enabled: true
-  auto_start: true
-  task_names:
-    - predict
-    - optimize
-  fallback_minute_by_task:
-    predict: 0
-    optimize: 5
+  enabled: true              # 是否启用调度器总开关（false 时不注册任何任务）
+  auto_start: true           # 服务启动时是否自动启动调度器
+  task_names:                # 需要注册的任务列表（按顺序处理）
+    - predict                # 预测任务：仅执行预测器
+    - optimize               # 优化任务：执行“预测 -> 优化”
+  fallback_minute_by_task:   # 小时级调度下，各任务 minute 缺省回退值
+    predict: 0               # predict 未配置 minute 时，默认每小时第 0 分钟
+    optimize: 5              # optimize 未配置 minute 时，默认每小时第 5 分钟
   tasks:
     predict:
-      enabled: true
+      enabled: true          # 是否启用 predict 任务
       frequency:
-        type: hourly
-        interval_hours: 1
-        minute: 0
+        type: hourly         # 调度类型：hourly（小时级）/ seconds（秒级联调用）
+        interval_hours: 1    # type=hourly 时生效：每隔 N 小时执行一次
+        minute: 0            # type=hourly 时生效：在每小时的第几分钟触发（0-59）
     optimize:
-      enabled: true
+      enabled: true          # 是否启用 optimize 任务
       frequency:
-        type: hourly
-        interval_hours: 1
-        minute: 5
+        type: hourly         # 调度类型：hourly（小时级）/ seconds（秒级联调用）
+        interval_hours: 1    # type=hourly 时生效：每隔 N 小时执行一次
+        minute: 5            # type=hourly 时生效：在每小时的第几分钟触发（0-59）
 
 # 数据 IO 配置
 dataio:
