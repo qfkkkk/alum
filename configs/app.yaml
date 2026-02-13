@@ -75,6 +75,12 @@ optimizer_hyperparams:
 scheduler:
   enabled: true
   auto_start: true
+  task_names:
+    - predict
+    - optimize
+  fallback_minute_by_task:
+    predict: 0
+    optimize: 5
   tasks:
     predict:
       enabled: true
