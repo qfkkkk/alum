@@ -49,48 +49,72 @@ class TestDosingScheduler(unittest.TestCase):
             dosing_scheduler.scheduler_running = False
             dosing_scheduler.scheduler_thread = None
         with dosing_scheduler.result_lock:
-            dosing_scheduler.latest_result = None
-        dosing_scheduler.schedule.clear(dosing_scheduler.SCHEDULER_TAG)
+            dosing_scheduler.latest_predict_result = None
+            dosing_scheduler.latest_optimize_result = None
+        dosing_scheduler.schedule.clear(dosing_scheduler.SCHEDULER_TAG_PREDICT)
+        dosing_scheduler.schedule.clear(dosing_scheduler.SCHEDULER_TAG_OPTIMIZE)
 
     def test_refresh_scheduler_settings_valid_and_invalid(self):
         valid_cfg = {
             "scheduler": {
                 "enabled": True,
                 "auto_start": False,
-                "frequency": {
-                    "type": "hourly",
-                    "interval_hours": 2,
-                    "minute": 10,
+                "tasks": {
+                    "predict": {
+                        "enabled": True,
+                        "frequency": {
+                            "type": "hourly",
+                            "interval_hours": 2,
+                            "minute": 10,
+                        },
+                    },
+                    "optimize": {
+                        "enabled": False,
+                        "frequency": {
+                            "type": "hourly",
+                            "interval_hours": 1,
+                            "minute": 5,
+                        },
+                    },
                 },
             }
         }
         with patch("services.dosing_scheduler.load_config", return_value=valid_cfg):
             settings = dosing_scheduler._refresh_scheduler_settings()
-        self.assertEqual(settings["frequency"]["interval_hours"], 2)
-        self.assertEqual(settings["frequency"]["minute"], 10)
+        self.assertEqual(settings["tasks"]["predict"]["frequency"]["interval_hours"], 2)
+        self.assertEqual(settings["tasks"]["predict"]["frequency"]["minute"], 10)
+        self.assertFalse(settings["tasks"]["optimize"]["enabled"])
         self.assertFalse(settings["auto_start"])
 
         invalid_cfg = {
             "scheduler": {
                 "enabled": True,
-                "frequency": {
-                    "type": "daily",
-                    "interval_hours": 0,
-                    "minute": 99,
+                "tasks": {
+                    "predict": {
+                        "enabled": True,
+                        "frequency": {
+                            "type": "daily",
+                            "interval_hours": 0,
+                            "minute": 99,
+                        },
+                    },
                 },
             }
         }
         with patch("services.dosing_scheduler.load_config", return_value=invalid_cfg):
             settings = dosing_scheduler._refresh_scheduler_settings()
-        self.assertEqual(settings["frequency"]["type"], "hourly")
-        self.assertEqual(settings["frequency"]["interval_hours"], 1)
-        self.assertEqual(settings["frequency"]["minute"], 5)
+        self.assertEqual(settings["tasks"]["predict"]["frequency"]["type"], "hourly")
+        self.assertEqual(settings["tasks"]["predict"]["frequency"]["interval_hours"], 1)
+        self.assertEqual(settings["tasks"]["predict"]["frequency"]["minute"], 0)
 
     def test_scheduler_lifecycle_start_stop_idempotent(self):
         settings = {
             "enabled": True,
             "auto_start": True,
-            "frequency": {"type": "hourly", "interval_hours": 1, "minute": 5},
+            "tasks": {
+                "predict": {"enabled": True, "frequency": {"type": "hourly", "interval_hours": 1, "minute": 0}},
+                "optimize": {"enabled": True, "frequency": {"type": "hourly", "interval_hours": 1, "minute": 5}},
+            },
         }
         with patch("services.dosing_scheduler._refresh_scheduler_settings", return_value=settings), patch(
             "services.dosing_scheduler.threading.Thread", DummyThread
@@ -111,7 +135,7 @@ class TestDosingScheduler(unittest.TestCase):
             self.assertTrue(ok)
             self.assertEqual(reason, "already_stopped")
 
-    def test_scheduled_job_success(self):
+    def test_scheduled_optimize_job_success(self):
         mock_data_dict = {"pool_1": np.random.rand(60, 6).astype(np.float32)}
         mock_last_dt = datetime(2026, 2, 11, 12, 0, 0)
         mock_pipeline = MagicMock()
@@ -124,14 +148,35 @@ class TestDosingScheduler(unittest.TestCase):
             dosing_scheduler.scheduled_optimization_job()
 
         with dosing_scheduler.result_lock:
-            result = dosing_scheduler.latest_result
+            result = dosing_scheduler.latest_optimize_result
         self.assertIsNotNone(result)
         self.assertEqual(result["status"], "success")
         self.assertTrue(result["upload_skipped"])
         self.assertEqual(result["pool_count"], 1)
+        self.assertEqual(result["task"], "optimize")
         self.assertIn("result", result)
 
-    def test_scheduled_job_failure(self):
+    def test_scheduled_predict_job_success(self):
+        mock_data_dict = {"pool_1": np.random.rand(60, 6).astype(np.float32)}
+        mock_last_dt = datetime(2026, 2, 11, 12, 0, 0)
+        mock_pipeline = MagicMock()
+        mock_pipeline.predict_only.return_value = {"pool_1": {"2026-02-11 12:05:00": 0.5}}
+        mock_pipeline.predictor_manager.config = {"seq_len": 60, "features": ["a"]}
+
+        with patch("services.dosing_scheduler.read_data", return_value=(mock_data_dict, mock_last_dt)), patch(
+            "services.dosing_scheduler.get_pipeline", return_value=mock_pipeline
+        ):
+            dosing_scheduler.scheduled_predict_job()
+
+        with dosing_scheduler.result_lock:
+            result = dosing_scheduler.latest_predict_result
+        self.assertIsNotNone(result)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["task"], "predict")
+        self.assertTrue(result["upload_skipped"])
+        self.assertEqual(result["pool_count"], 1)
+
+    def test_scheduled_optimize_job_failure(self):
         mock_pipeline = MagicMock()
         mock_pipeline.predictor_manager.config = {"seq_len": 60, "features": ["a"]}
         with patch("services.dosing_scheduler.read_data", side_effect=ValueError("boom")), patch(
@@ -140,10 +185,11 @@ class TestDosingScheduler(unittest.TestCase):
             dosing_scheduler.scheduled_optimization_job()
 
         with dosing_scheduler.result_lock:
-            result = dosing_scheduler.latest_result
+            result = dosing_scheduler.latest_optimize_result
         self.assertIsNotNone(result)
         self.assertEqual(result["status"], "error")
         self.assertTrue(result["upload_skipped"])
+        self.assertEqual(result["task"], "optimize")
         self.assertIn("error", result)
         self.assertIn("traceback", result)
 
@@ -151,7 +197,10 @@ class TestDosingScheduler(unittest.TestCase):
         settings = {
             "enabled": True,
             "auto_start": True,
-            "frequency": {"type": "hourly", "interval_hours": 1, "minute": 5},
+            "tasks": {
+                "predict": {"enabled": True, "frequency": {"type": "hourly", "interval_hours": 1, "minute": 0}},
+                "optimize": {"enabled": True, "frequency": {"type": "hourly", "interval_hours": 1, "minute": 5}},
+            },
         }
         with patch("services.dosing_scheduler._refresh_scheduler_settings", return_value=settings), patch(
             "services.dosing_scheduler.threading.Thread", DummyThread
@@ -174,15 +223,27 @@ class TestDosingScheduler(unittest.TestCase):
         status_resp = self.client.get("/alum_dosing/scheduler/status")
         status_data = json.loads(status_resp.data)
         self.assertIn("scheduler_running", status_data)
-        self.assertIn("has_latest_result", status_data)
-        self.assertIn("next_run_at", status_data)
         self.assertIn("timestamp", status_data)
+        self.assertIn("predict", status_data)
+        self.assertIn("optimize", status_data)
+        self.assertIn("has_latest_result", status_data["predict"])
+        self.assertIn("has_latest_result", status_data["optimize"])
 
         latest_resp = self.client.get("/alum_dosing/latest_result")
         latest_data = json.loads(latest_resp.data)
         self.assertEqual(latest_data["status"], "no_result")
 
-        sample_latest = {
+        sample_predict = {
+            "task": "predict",
+            "status": "success",
+            "executed_at": "2026-02-12 11:00:00",
+            "duration_ms": 10,
+            "upload_skipped": True,
+            "pool_count": 1,
+            "result": {"pool_1": {"2026-02-12 11:05:00": 0.5}},
+        }
+        sample_optimize = {
+            "task": "optimize",
             "status": "success",
             "executed_at": "2026-02-12 12:00:00",
             "duration_ms": 12,
@@ -191,13 +252,26 @@ class TestDosingScheduler(unittest.TestCase):
             "result": {"pool_1": {"status": "success"}},
         }
         with dosing_scheduler.result_lock:
-            dosing_scheduler.latest_result = sample_latest
+            dosing_scheduler.latest_predict_result = sample_predict
+            dosing_scheduler.latest_optimize_result = sample_optimize
 
         latest_resp = self.client.get("/alum_dosing/latest_result")
         latest_data = json.loads(latest_resp.data)
         self.assertEqual(latest_data["status"], "success")
         self.assertIn("result", latest_data)
-        self.assertEqual(latest_data["result"]["upload_skipped"], True)
+        self.assertIn("predict", latest_data["result"])
+        self.assertIn("optimize", latest_data["result"])
+        self.assertEqual(latest_data["result"]["optimize"]["upload_skipped"], True)
+
+        predict_latest_resp = self.client.get("/alum_dosing/latest_result/predict")
+        predict_latest_data = json.loads(predict_latest_resp.data)
+        self.assertEqual(predict_latest_data["status"], "success")
+        self.assertEqual(predict_latest_data["result"]["task"], "predict")
+
+        optimize_latest_resp = self.client.get("/alum_dosing/latest_result/optimize")
+        optimize_latest_data = json.loads(optimize_latest_resp.data)
+        self.assertEqual(optimize_latest_data["status"], "success")
+        self.assertEqual(optimize_latest_data["result"]["task"], "optimize")
 
 
 if __name__ == "__main__":
