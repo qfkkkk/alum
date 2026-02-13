@@ -11,7 +11,35 @@ _root = Path(__file__).resolve().parent.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 from dataio.data_factory import load_agg_data
-from utils.config_loader import load_alum_config
+from utils.config_loader import load_alum_config, load_config
+
+
+def _resolve_seq_len(app_config: Dict[str, Any] = None) -> int:
+    """
+    解析目标序列长度，优先级：
+    1) 入参 app_config（通常来自 configs/app.yaml）
+    2) 默认加载 configs/app.yaml
+    3) 兜底 60
+    """
+    seq_len = None
+
+    if isinstance(app_config, dict):
+        seq_len = app_config.get("seq_len")
+
+    if seq_len is None:
+        try:
+            cfg = load_config()
+            if isinstance(cfg, dict):
+                seq_len = cfg.get("seq_len")
+        except Exception:
+            seq_len = None
+
+    try:
+        seq_len = int(seq_len)
+    except (TypeError, ValueError):
+        seq_len = 60
+
+    return seq_len if seq_len >= 1 else 60
 
 
 def read_data(
@@ -42,10 +70,10 @@ def read_data(
         - 第二个元素：datetime，数据的最后时间点
     """
     mode_norm = str(mode or 'remote').strip().lower()
+    seq_len = _resolve_seq_len(app_config)
 
     if mode_norm == 'local':
         cfg = app_config or {}
-        seq_len = int(cfg.get('seq_len', 60))
         feature_order = cfg.get('features', ['dose', 'turb_chushui', 'turb_jinshui', 'flow', 'pH', 'temp_shuimian'])
 
         pools_cfg = cfg.get('pools', {})
@@ -172,4 +200,20 @@ def read_data(
         pool_array = np.column_stack(pool_data_list)
         result[pool_key] = pool_array
     
-    return result, last_time
+    # 对齐到固定输入步长：
+    # - 远程聚合窗口可能出现 61 点（包含起止边界），这里统一截取最后 seq_len 点。
+    # - 点数不足时直接抛错，避免后续模型输入维度不一致。
+    aligned_result: Dict[str, np.ndarray] = {}
+    for pool_key, pool_array in result.items():
+        if pool_array.shape[0] < seq_len:
+            raise ValueError(
+                f"{pool_key} 远程数据点不足: {pool_array.shape[0]} < 期望 {seq_len}"
+            )
+        if pool_array.shape[0] > seq_len:
+            pool_array = pool_array[-seq_len:, :]
+        pool_array = np.nan_to_num(
+            pool_array, nan=0.0, posinf=0.0, neginf=0.0
+        ).astype(np.float32)
+        aligned_result[pool_key] = pool_array
+
+    return aligned_result, last_time

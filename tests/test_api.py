@@ -99,22 +99,24 @@ class TestDosingAPI(unittest.TestCase):
             "pool_4": {"current_dose": 10.5, "ph": 7.15, "flow": 1195.0},
         }
 
-    def test_predict_get(self):
-        # 走真实链路：read_data(local) -> predict_only
+    def test_predict_get_not_allowed(self):
         response = self.app.get('/alum_dosing/predict')
-        self._assert_predict_response(response)
+        self.assertEqual(response.status_code, 405)
 
-    def test_predict_post_empty_payload_fallback(self):
-        # 兼容旧行为：POST 空请求体仍走内部 read_data 链路
+    def test_predict_post_missing_mode_bad_request(self):
         response = self.app.post(
             '/alum_dosing/predict',
             data=json.dumps({}),
             content_type='application/json'
         )
-        self._assert_predict_response(response)
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.data)
+        self.assertFalse(data["success"])
+        self.assertEqual(data["code"], "PREDICT_API_BAD_REQUEST")
 
     def test_predict_post_external_data(self):
         payload = {
+            "mode": "external",
             "last_dt": "2026-02-13 12:00:00",
             "data_dict": self._build_full_fake_input_data()
         }
@@ -130,22 +132,59 @@ class TestDosingAPI(unittest.TestCase):
         self.assertGreaterEqual(data["data"]["pool_count"], 1)
         self.assertGreaterEqual(data["data"]["point_count"], 1)
 
-    def test_optimize_get(self):
-        # 走真实链路：read_data(local) -> pipeline.run
-        response = self.app.get('/alum_dosing/optimize')
-        self._assert_optimize_response(response)
+    def test_predict_post_online_mode(self):
+        payload = {"mode": "online"}
+        response = self.app.post(
+            '/alum_dosing/predict',
+            data=json.dumps(payload),
+            content_type='application/json'
+        )
+        self._assert_predict_response(response)
 
-    def test_optimize_post_empty_payload_fallback(self):
-        # 兼容旧行为：POST 空请求体仍走全流程
+    def test_predict_post_refer_style_data(self):
+        payload = {
+            "mode": "agent",
+            "last_dt": "2026-02-13 12:00:00",
+            "data": self._build_full_fake_input_data(),
+        }
+        response = self.app.post(
+            '/alum_dosing/predict',
+            data=json.dumps(payload),
+            content_type='application/json'
+        )
+        self._assert_predict_response(response)
+
+    def test_predict_post_bad_mode(self):
+        payload = {
+            "mode": "bad_mode",
+            "data_dict": self._build_full_fake_input_data(),
+        }
+        response = self.app.post(
+            '/alum_dosing/predict',
+            data=json.dumps(payload),
+            content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.data)
+        self.assertFalse(data["success"])
+        self.assertEqual(data["code"], "PREDICT_API_BAD_REQUEST")
+
+    def test_optimize_get_not_allowed(self):
+        response = self.app.get('/alum_dosing/optimize')
+        self.assertEqual(response.status_code, 405)
+
+    def test_optimize_post_online_mode(self):
+        payload = {"mode": "online"}
         response = self.app.post(
             '/alum_dosing/optimize',
-            data=json.dumps({}),
+            data=json.dumps(payload),
             content_type='application/json'
         )
         self._assert_optimize_response(response)
 
     def test_optimize_post_with_predictions(self):
         payload = {
+            "mode": "external",
             "predictions": self._build_full_fake_predictions(),
             "current_features": self._build_full_fake_features(),
         }
@@ -162,8 +201,26 @@ class TestDosingAPI(unittest.TestCase):
         self.assertGreaterEqual(data["data"]["point_count"], 1)
 
     def test_optimize_post_bad_request(self):
-        # 缺少 current_features，预期 400
+        # 缺少 mode，预期 400
         payload = {
+            "predictions": {
+                "pool_1": {"2026-02-13 12:05:00": 1.11}
+            }
+        }
+        response = self.app.post(
+            '/alum_dosing/optimize',
+            data=json.dumps(payload),
+            content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.data)
+        self.assertFalse(data["success"])
+        self.assertEqual(data["code"], "OPTIMIZE_API_BAD_REQUEST")
+
+    def test_optimize_post_external_missing_features_bad_request(self):
+        # mode=external 但缺少 current_features，预期 400
+        payload = {
+            "mode": "external",
             "predictions": {
                 "pool_1": {"2026-02-13 12:05:00": 1.11}
             }

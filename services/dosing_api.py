@@ -3,10 +3,8 @@
 投药优化 API 服务（触发式）。
 
 路由：
-    GET  /alum_dosing/predict   - 仅预测（内部拉数）
-    POST /alum_dosing/predict   - 仅预测（接收外部输入）
-    GET  /alum_dosing/optimize  - 优化（全流程）
-    POST /alum_dosing/optimize  - 优化（接收预测结果+特征）
+    POST /alum_dosing/predict   - 预测（mode=online/external）
+    POST /alum_dosing/optimize  - 优化（mode=online/external）
     GET  /alum_dosing/health    - 健康检查
 """
 
@@ -84,6 +82,9 @@ def _normalize_input_data(payload: Dict[str, Any]) -> Dict[str, np.ndarray]:
         raw = payload.get("input_data")
     if raw is None:
         raw = payload.get("raw_data")
+    if raw is None:
+        # 兼容 refer 风格：mode + data
+        raw = payload.get("data")
 
     if not isinstance(raw, dict) or not raw:
         raise ValueError("POST 请求体缺少 data_dict/input_data/raw_data，或类型非法")
@@ -298,13 +299,13 @@ def health_check():
 
 def _run_predict_for_request():
     """
-    预测请求执行入口（供 GET/POST 路由复用）。
+    预测请求执行入口（POST）。
 
     行为：
-    - GET: 走 read_data 拉实时数据，再调用 predict_only。
     - POST:
-      - 有 payload: 用外部输入做预测；
-      - 空 payload: 回退 read_data（兼容旧调用方）。
+      - mode=online: 走 read_data 拉实时数据；
+      - mode=external/agent/multisim/mulitsim: 用外部输入做预测；
+      - mode 必填，缺失或非法返回 400。
 
     错误处理：
     - 入参校验错误返回 400。
@@ -314,18 +315,24 @@ def _run_predict_for_request():
         pipeline = get_pipeline()
         config = pipeline.predictor_manager.config
 
-        if request.method == "POST":
-            payload = request.get_json(silent=True) or {}
-            if not payload:
-                data_dict, last_dt = read_data(config)
-            else:
-                data_dict = _normalize_input_data(payload)
-                try:
-                    last_dt = _parse_datetime(payload.get("last_dt"))
-                except ValueError:
-                    last_dt = datetime.now()
-        else:
+        payload = request.get_json(silent=True) or {}
+        mode_raw = payload.get("mode")
+        if mode_raw is None:
+            raise ValueError("predict POST 缺少必填参数 mode")
+
+        mode = str(mode_raw).strip().lower()
+        if mode == "online":
             data_dict, last_dt = read_data(config)
+        elif mode in ("external", "agent", "multisim", "mulitsim"):
+            data_dict = _normalize_input_data(payload)
+            try:
+                last_dt = _parse_datetime(payload.get("last_dt"))
+            except ValueError:
+                last_dt = datetime.now()
+        else:
+            raise ValueError(
+                f"predict mode 不支持: {mode}，可选 online/external/agent/multisim"
+            )
 
         predictions = pipeline.predict_only(data_dict, last_dt)
         return _format_predict_response(predictions, last_dt)
@@ -346,11 +353,6 @@ def _run_predict_for_request():
         )
 
 
-@app.route("/alum_dosing/predict", methods=["GET"])
-def predict_get_api():
-    return _run_predict_for_request()
-
-
 @app.route("/alum_dosing/predict", methods=["POST"])
 def predict_post_api():
     return _run_predict_for_request()
@@ -358,13 +360,13 @@ def predict_post_api():
 
 def _run_optimize_for_request():
     """
-    优化请求执行入口（供 GET/POST 路由复用）。
+    优化请求执行入口（POST）。
 
     行为：
-    - GET: 走 read_data + pipeline.run（预测+优化全流程）。
     - POST:
-      - 有 payload: 解析 predictions/current_features，直接 optimize_only；
-      - 空 payload: 回退 pipeline.run（兼容旧调用方）。
+      - mode=online: 走 read_data + pipeline.run（预测+优化全流程）；
+      - mode=external/agent/multisim/mulitsim: 解析 predictions/current_features，直接 optimize_only；
+      - mode 必填，缺失或非法返回 400。
 
     错误处理：
     - 入参校验错误返回 400。
@@ -374,26 +376,31 @@ def _run_optimize_for_request():
         pipeline = get_pipeline()
         config = pipeline.predictor_manager.config
 
-        if request.method == "POST":
-            payload = request.get_json(silent=True) or {}
-            if not payload:
-                data_dict, last_dt = read_data(config)
-                results = pipeline.run(data_dict, last_dt)
-            else:
-                predictions = _normalize_predictions_from_payload(payload)
-                current_features = _normalize_current_features(payload)
-                recommendations = pipeline.optimize_only(
-                    predictions,
-                    current_features=current_features,
-                )
-                results = {
-                    pool_id: {"status": "success", "recommendations": recs}
-                    for pool_id, recs in recommendations.items()
-                }
-                last_dt = _infer_last_dt(predictions)
-        else:
+        payload = request.get_json(silent=True) or {}
+        mode_raw = payload.get("mode")
+        if mode_raw is None:
+            raise ValueError("optimize POST 缺少必填参数 mode")
+
+        mode = str(mode_raw).strip().lower()
+        if mode == "online":
             data_dict, last_dt = read_data(config)
             results = pipeline.run(data_dict, last_dt)
+        elif mode in ("external", "agent", "multisim", "mulitsim"):
+            predictions = _normalize_predictions_from_payload(payload)
+            current_features = _normalize_current_features(payload)
+            recommendations = pipeline.optimize_only(
+                predictions,
+                current_features=current_features,
+            )
+            results = {
+                pool_id: {"status": "success", "recommendations": recs}
+                for pool_id, recs in recommendations.items()
+            }
+            last_dt = _infer_last_dt(predictions)
+        else:
+            raise ValueError(
+                f"optimize mode 不支持: {mode}，可选 online/external/agent/multisim"
+            )
 
         return _format_optimize_response(results, last_dt)
     except ValueError as exc:
@@ -411,11 +418,6 @@ def _run_optimize_for_request():
             detail=str(exc),
             status_code=500,
         )
-
-
-@app.route("/alum_dosing/optimize", methods=["GET"])
-def optimize_get_api():
-    return _run_optimize_for_request()
 
 
 @app.route("/alum_dosing/optimize", methods=["POST"])
