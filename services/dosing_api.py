@@ -142,7 +142,7 @@ def optimize_api():
         )
 
 
-def run_flask_app(host: str = "0.0.0.0", port: int = 5002):
+def run_flask_app(host: str = "0.0.0.0", port: int = 5001):
     """
     运行 Flask API 服务（阻塞模式）。
     """
