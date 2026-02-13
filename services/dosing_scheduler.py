@@ -50,6 +50,34 @@ def _now_str() -> str:
     return datetime.now().strftime(time_format)
 
 
+def _parse_positive_int(value: Any, default: int) -> int:
+    """
+    解析正整数，支持字符串表达式：
+    - "300"
+    - "60x5"
+    - "60*5"
+    """
+    try:
+        if isinstance(value, str):
+            raw = value.strip().lower().replace(" ", "")
+            if not raw:
+                return default
+            if "x" in raw or "*" in raw:
+                sep = "x" if "x" in raw else "*"
+                product = 1
+                for token in raw.split(sep):
+                    if not token.isdigit():
+                        return default
+                    product *= int(token)
+                return product if product >= 1 else default
+            parsed = int(raw)
+        else:
+            parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 1 else default
+
+
 def _default_task_names() -> Tuple[str, ...]:
     return DEFAULT_TASK_NAMES
 
@@ -139,10 +167,7 @@ def _sanitize_frequency(
 
     frequency_type = str(raw_frequency.get("type", "hourly")).lower().strip()
     if frequency_type in ("seconds", "secondly"):
-        try:
-            interval_seconds = int(raw_frequency.get("interval_seconds", 10))
-        except (TypeError, ValueError):
-            interval_seconds = 10
+        interval_seconds = _parse_positive_int(raw_frequency.get("interval_seconds", 10), 10)
         if interval_seconds < 1:
             logger.warning(f"{warn_prefix} interval_seconds 必须 >= 1，回退默认 10s")
             interval_seconds = 10
@@ -237,10 +262,7 @@ def _register_task_job(tag: str, task_name: str, frequency: Dict[str, Any], job_
     frequency_type = str(frequency.get("type", "hourly")).lower().strip()
 
     if frequency_type == "seconds":
-        try:
-            interval_seconds = int(frequency.get("interval_seconds", 10))
-        except (TypeError, ValueError):
-            interval_seconds = 10
+        interval_seconds = _parse_positive_int(frequency.get("interval_seconds", 10), 10)
         if interval_seconds < 1:
             interval_seconds = 10
         schedule.every(interval_seconds).seconds.do(job_func).tag(tag)
@@ -249,7 +271,7 @@ def _register_task_job(tag: str, task_name: str, frequency: Dict[str, Any], job_
         )
         return
 
-    interval_hours = int(frequency.get("interval_hours", 1))
+    interval_hours = _parse_positive_int(frequency.get("interval_hours", 1), 1)
     minute = int(frequency.get("minute", 0))
     if interval_hours < 1:
         interval_hours = 1
