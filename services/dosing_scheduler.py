@@ -40,6 +40,8 @@ result_lock = threading.Lock()
 scheduler_running = False
 scheduler_thread: Optional[threading.Thread] = None
 scheduler_settings: Dict[str, Any] = {}
+# 运行时任务范围：必须包含 predict 或 optimize
+scheduler_task_scope: Tuple[str, ...] = DEFAULT_TASK_NAMES
 
 # 任务结果缓存
 latest_predict_result: Optional[Dict[str, Any]] = None
@@ -251,6 +253,95 @@ def _refresh_scheduler_settings() -> Dict[str, Any]:
     return scheduler_settings
 
 
+def _sanitize_runtime_task_scope(raw_task_names: Any) -> Tuple[str, ...]:
+    if raw_task_names is None:
+        return tuple(DEFAULT_TASK_NAMES)
+
+    if isinstance(raw_task_names, str):
+        candidates = [raw_task_names]
+    elif isinstance(raw_task_names, (list, tuple, set)):
+        candidates = list(raw_task_names)
+    else:
+        logger.warning("[Scheduler] task scope 类型非法，忽略 scope")
+        return tuple()
+
+    normalized = []
+    for item in candidates:
+        if not isinstance(item, str):
+            continue
+        task_name = item.strip().lower()
+        if not task_name:
+            continue
+        if task_name not in TASK_TAG_MAP:
+            logger.warning(f"[Scheduler] task scope 中存在未知任务: {task_name}")
+            continue
+        if task_name not in normalized:
+            normalized.append(task_name)
+    if not normalized:
+        logger.warning("[Scheduler] task scope 非法，必须至少包含 predict 或 optimize")
+    return tuple(normalized)
+
+
+def set_scheduler_task_scope(task_names: Any = None) -> Tuple[str, ...]:
+    """
+    设置调度器运行时任务范围。
+
+    - None: 重置为默认范围（predict+optimize）
+    - ("predict",): 仅调度预测任务
+    - ("optimize",): 仅调度优化任务
+    """
+    global scheduler_task_scope
+    scoped = _sanitize_runtime_task_scope(task_names)
+    if not scoped:
+        logger.warning(
+            f"[Scheduler] 忽略空 task scope，保持原 scope: {list(scheduler_task_scope)}"
+        )
+        return scheduler_task_scope
+
+    scheduler_task_scope = scoped
+    logger.info(f"[Scheduler] 已设置 task scope: {list(scheduler_task_scope)}")
+    return scheduler_task_scope
+
+
+def _apply_runtime_task_scope(
+    settings: Dict[str, Any], task_scope: Tuple[str, ...]
+) -> Dict[str, Any]:
+    scoped_settings = dict(settings)
+    scoped_settings["task_names"] = []
+    scoped_settings["tasks"] = {}
+    scoped_settings["fallback_minute_by_task"] = {}
+
+    if not task_scope:
+        return scoped_settings
+
+    task_names = settings.get("task_names", list(DEFAULT_TASK_NAMES))
+    task_cfg = settings.get("tasks", {})
+    fallback_minute_by_task = settings.get("fallback_minute_by_task", {})
+    default_fallback = _default_fallback_minute_by_task(task_scope)
+
+    selected = [name for name in task_names if name in task_scope]
+    for task_name in task_scope:
+        if task_name not in selected and task_name in TASK_TAG_MAP:
+            selected.append(task_name)
+
+    scoped_settings["task_names"] = selected
+    scoped_settings["tasks"] = {
+        task_name: task_cfg.get(
+            task_name,
+            {
+                "enabled": True,
+                "frequency": _default_frequency(default_fallback.get(task_name, 0)),
+            },
+        )
+        for task_name in selected
+    }
+    scoped_settings["fallback_minute_by_task"] = {
+        task_name: int(fallback_minute_by_task.get(task_name, default_fallback.get(task_name, 0)))
+        for task_name in selected
+    }
+    return scoped_settings
+
+
 def _register_task_job(tag: str, task_name: str, frequency: Dict[str, Any], job_func) -> None:
     schedule.clear(tag)
     frequency_type = str(frequency.get("type", "hourly")).lower().strip()
@@ -306,7 +397,7 @@ def _register_task_job(tag: str, task_name: str, frequency: Dict[str, Any], job_
     )
 
 
-def _register_scheduler_jobs() -> None:
+def _register_scheduler_jobs() -> int:
     schedule.clear(SCHEDULER_TAG_PREDICT)
     schedule.clear(SCHEDULER_TAG_OPTIMIZE)
 
@@ -339,6 +430,7 @@ def _register_scheduler_jobs() -> None:
 
     if enabled_count == 0:
         logger.warning("[调度器] 所有任务均被禁用或未识别")
+    return enabled_count
 
 
 def _get_next_run_at(tag: str) -> Optional[str]:
@@ -498,7 +590,10 @@ def _run_scheduler_loop():
         time.sleep(1)
 
 
-def start_scheduler(interval_minutes: Optional[int] = None) -> Tuple[bool, str]:
+def start_scheduler(
+    interval_minutes: Optional[int] = None,
+    task_names_override: Optional[Tuple[str, ...]] = None,
+) -> Tuple[bool, str]:
     global scheduler_running, scheduler_thread
 
     if interval_minutes is not None:
@@ -508,18 +603,33 @@ def start_scheduler(interval_minutes: Optional[int] = None) -> Tuple[bool, str]:
         if scheduler_running:
             return False, "already_running"
 
+        if task_names_override is not None:
+            task_scope = _sanitize_runtime_task_scope(task_names_override)
+        else:
+            task_scope = scheduler_task_scope
+        if not task_scope:
+            logger.warning("[Scheduler] task scope 为空，必须包含 predict 或 optimize")
+            return False, "invalid_task_scope"
+
         settings = _refresh_scheduler_settings()
+        settings = _apply_runtime_task_scope(settings, task_scope)
+        scheduler_settings.clear()
+        scheduler_settings.update(settings)
+
         if not settings.get("enabled", True):
             logger.warning("[调度器] 已禁用（scheduler.enabled=false）")
             return False, "disabled"
 
-        _register_scheduler_jobs()
+        enabled_count = _register_scheduler_jobs()
+        if enabled_count == 0:
+            logger.warning("[调度器] 没有可启动的任务")
+            return False, "no_tasks"
 
         scheduler_running = True
         scheduler_thread = threading.Thread(target=_run_scheduler_loop, daemon=True)
         scheduler_thread.start()
 
-    logger.info("[调度器] 已启动")
+    logger.info(f"[调度器] 已启动，任务: {settings.get('task_names', [])}")
     return True, "started"
 
 
@@ -561,6 +671,7 @@ def scheduler_status_api():
         running = scheduler_running
         task_names = scheduler_settings.get("task_names", list(DEFAULT_TASK_NAMES))
         tasks_cfg = scheduler_settings.get("tasks", {})
+        task_scope = list(scheduler_task_scope)
 
     tasks_status = {}
     with result_lock:
@@ -578,6 +689,7 @@ def scheduler_status_api():
         data={
             "scheduler": {
                 "running": running,
+                "task_scope": task_scope,
                 "tasks": tasks_status,
             }
         }
@@ -604,6 +716,20 @@ def start_scheduler_api():
             code="SCHEDULER_DISABLED",
             message="调度器已禁用（scheduler.enabled=false）",
             detail="scheduler.enabled=false",
+            status_code=400,
+        )
+    elif reason == "no_tasks":
+        return error_response(
+            code="SCHEDULER_NO_TASKS",
+            message="调度器无可执行任务",
+            detail="task scope 为空或全部任务被禁用",
+            status_code=400,
+        )
+    elif reason == "invalid_task_scope":
+        return error_response(
+            code="SCHEDULER_INVALID_TASK_SCOPE",
+            message="调度器任务范围非法",
+            detail="task scope 必须包含 predict 或 optimize",
             status_code=400,
         )
     return error_response(
