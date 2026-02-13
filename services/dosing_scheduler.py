@@ -15,11 +15,11 @@ import traceback
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
-from flask import jsonify
 import schedule
 
 from .dosing_api import app, get_pipeline
 from .io_adapter import read_data, upload_recommend_message
+from .response import error_response, ok_response
 from utils.config_loader import load_config
 from utils.logger import Logger
 
@@ -224,18 +224,25 @@ def scheduled_predict_job():
         predictions = pipeline.predict_only(data_dict, last_dt)
         duration_ms = int((time.time() - start_ts) * 1000)
         pool_count = len(predictions) if isinstance(predictions, dict) else 0
+        upload_result = upload_recommend_message(
+            predictions if isinstance(predictions, dict) else {},
+            write_targets=("predict",),
+        )
+        upload_skipped = bool(upload_result.get("skipped", True))
 
         latest_payload = {
             "task": "predict",
             "status": "success",
             "executed_at": _now_str(),
             "duration_ms": duration_ms,
-            "upload_skipped": True,
+            "upload_skipped": upload_skipped,
             "pool_count": pool_count,
             "result": predictions,
         }
         _save_latest_result("predict", latest_payload)
-        logger.info(f"[定时任务] 预测任务成功: duration_ms={duration_ms}, pool_count={pool_count}")
+        logger.info(
+            f"[定时任务] 预测任务成功: duration_ms={duration_ms}, pool_count={pool_count}, upload_skipped={upload_skipped}"
+        )
     except Exception as exc:
         duration_ms = int((time.time() - start_ts) * 1000)
         error_traceback = traceback.format_exc()
@@ -275,7 +282,10 @@ def scheduled_optimization_job():
         duration_ms = int((time.time() - start_ts) * 1000)
         pool_count = len(result) if isinstance(result, dict) else 0
 
-        upload_result = upload_recommend_message(result if isinstance(result, dict) else {})
+        upload_result = upload_recommend_message(
+            result if isinstance(result, dict) else {},
+            write_targets=("optimize",),
+        )
         upload_skipped = bool(upload_result.get("skipped", True))
 
         latest_payload = {
@@ -385,64 +395,86 @@ def scheduler_status_api():
         running = scheduler_running
         tasks_cfg = scheduler_settings.get("tasks", {})
 
-    status = {
-        "scheduler_running": running,
-        "timestamp": _now_str(),
-    }
-
     with result_lock:
         predict_latest = latest_predict_result
         optimize_latest = latest_optimize_result
 
-    status["predict"] = {
+    predict_status = {
         "enabled": bool(tasks_cfg.get("predict", {}).get("enabled", True)),
         "next_run_at": _get_next_run_at(SCHEDULER_TAG_PREDICT),
         "has_latest_result": predict_latest is not None,
         "last_executed_at": predict_latest.get("executed_at") if predict_latest else None,
     }
-    status["optimize"] = {
+    optimize_status = {
         "enabled": bool(tasks_cfg.get("optimize", {}).get("enabled", True)),
         "next_run_at": _get_next_run_at(SCHEDULER_TAG_OPTIMIZE),
         "has_latest_result": optimize_latest is not None,
         "last_executed_at": optimize_latest.get("executed_at") if optimize_latest else None,
     }
 
-    return jsonify(status)
+    return ok_response(
+        data={
+            "scheduler": {
+                "running": running,
+                "tasks": {
+                    "predict": predict_status,
+                    "optimize": optimize_status,
+                },
+            }
+        }
+    )
 
 
 @app.route("/alum_dosing/scheduler/start", methods=["POST"])
 def start_scheduler_api():
     success, reason = start_scheduler()
     if success:
-        status = "success"
-        message = "调度器已启动"
+        return ok_response(
+            code="SCHEDULER_STARTED",
+            message="调度器已启动",
+            data={"scheduler_running": True, "state": "started"},
+        )
     elif reason == "already_running":
-        status = "already_running"
-        message = "调度器已在运行中"
+        return ok_response(
+            code="SCHEDULER_ALREADY_RUNNING",
+            message="调度器已在运行中",
+            data={"scheduler_running": True, "state": "already_running"},
+        )
     elif reason == "disabled":
-        status = "disabled"
-        message = "调度器已禁用（scheduler.enabled=false）"
-    else:
-        status = "error"
-        message = "调度器启动失败"
-
-    return jsonify({"status": status, "message": message, "timestamp": _now_str()})
+        return error_response(
+            code="SCHEDULER_DISABLED",
+            message="调度器已禁用（scheduler.enabled=false）",
+            detail="scheduler.enabled=false",
+            status_code=400,
+        )
+    return error_response(
+        code="SCHEDULER_START_FAILED",
+        message="调度器启动失败",
+        detail=f"reason={reason}",
+        status_code=500,
+    )
 
 
 @app.route("/alum_dosing/scheduler/stop", methods=["POST"])
 def stop_scheduler_api():
     success, reason = stop_scheduler()
+    if not success:
+        return error_response(
+            code="SCHEDULER_STOP_FAILED",
+            message="调度器停止失败",
+            detail=f"reason={reason}",
+            status_code=500,
+        )
     if reason == "already_stopped":
-        message = "调度器未运行（已是停止状态）"
-    else:
-        message = "调度器已停止"
-
-    return jsonify(
-        {
-            "status": "success" if success else "error",
-            "message": message,
-            "timestamp": _now_str(),
-        }
+        return ok_response(
+            code="SCHEDULER_ALREADY_STOPPED",
+            message="调度器未运行（已是停止状态）",
+            data={"scheduler_running": False, "state": "already_stopped"},
+        )
+    return ok_response(
+        code="SCHEDULER_STOPPED",
+        message="调度器已停止",
+        data={"scheduler_running": False, "state": "stopped"},
     )
 
 
@@ -453,22 +485,18 @@ def get_latest_result_api():
         optimize_latest = latest_optimize_result
 
     if predict_latest is None and optimize_latest is None:
-        return jsonify(
-            {
-                "status": "no_result",
-                "message": "暂无执行结果",
-                "timestamp": _now_str(),
-            }
+        return ok_response(
+            code="NO_RESULT",
+            message="暂无执行结果",
+            data={"latest": None},
         )
 
-    return jsonify(
-        {
-            "status": "success",
-            "result": {
+    return ok_response(
+        data={
+            "latest": {
                 "predict": predict_latest,
                 "optimize": optimize_latest,
-            },
-            "timestamp": _now_str(),
+            }
         }
     )
 
@@ -478,8 +506,12 @@ def get_latest_predict_result_api():
     with result_lock:
         result = latest_predict_result
     if result is None:
-        return jsonify({"status": "no_result", "message": "暂无预测任务结果", "timestamp": _now_str()})
-    return jsonify({"status": "success", "result": result, "timestamp": _now_str()})
+        return ok_response(
+            code="NO_RESULT",
+            message="暂无预测任务结果",
+            data={"task": "predict", "latest": None},
+        )
+    return ok_response(data={"task": "predict", "latest": result})
 
 
 @app.route("/alum_dosing/latest_result/optimize", methods=["GET"])
@@ -487,8 +519,12 @@ def get_latest_optimize_result_api():
     with result_lock:
         result = latest_optimize_result
     if result is None:
-        return jsonify({"status": "no_result", "message": "暂无优化任务结果", "timestamp": _now_str()})
-    return jsonify({"status": "success", "result": result, "timestamp": _now_str()})
+        return ok_response(
+            code="NO_RESULT",
+            message="暂无优化任务结果",
+            data={"task": "optimize", "latest": None},
+        )
+    return ok_response(data={"task": "optimize", "latest": result})
 
 
 def main():
