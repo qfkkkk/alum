@@ -37,6 +37,15 @@ class TestDosingSchedulerIntegration(unittest.TestCase):
         dosing_scheduler.schedule.clear(dosing_scheduler.SCHEDULER_TAG_PREDICT)
         dosing_scheduler.schedule.clear(dosing_scheduler.SCHEDULER_TAG_OPTIMIZE)
 
+    def test_seconds_expression_frequency_parse(self):
+        freq = dosing_scheduler._sanitize_frequency(
+            {"type": "seconds", "interval_seconds": "60x5"},
+            "[Scheduler:predict]",
+            0,
+        )
+        self.assertEqual(freq["type"], "seconds")
+        self.assertEqual(freq["interval_seconds"], 300)
+
     def test_predict_job_integration(self):
         dosing_scheduler.scheduled_predict_job()
 

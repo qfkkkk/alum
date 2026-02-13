@@ -36,16 +36,17 @@ scheduler:
       enabled: true
       frequency:
         type: seconds
-        interval_seconds: 10
+        interval_seconds: 300
     optimize:
       enabled: true
       frequency:
         type: seconds
-        interval_seconds: 15
+        interval_seconds: 300
 ```
 
 说明：
-- 本地联调建议用 `seconds`，可以快速看到任务执行日志和结果。
+- 这里按“部署每 5 分钟一次”示例配置：`300` 秒（`60x5`）。
+- `interval_seconds` 也支持写字符串表达式：`"60x5"` 或 `"60*5"`。
 - 如果要切回小时级，把 `type` 改为 `hourly`，并配置 `interval_hours` + `minute`。
 
 ## 2. 启动命令
@@ -132,7 +133,7 @@ dataio:
 - `write_model_name_optimize`：优化结果写入的模型名。
 - `write_model_name_predict`：预测结果写入的模型名。
 
-调度频率按生产需求改回小时级示例：
+调度频率按“每 5 分钟一次”示例（推荐）：
 
 ```yaml
 scheduler:
@@ -148,15 +149,13 @@ scheduler:
     predict:
       enabled: true
       frequency:
-        type: hourly
-        interval_hours: 1
-        minute: 0
+        type: seconds
+        interval_seconds: 300   # 或 "60x5"
     optimize:
       enabled: true
       frequency:
-        type: hourly
-        interval_hours: 1
-        minute: 5
+        type: seconds
+        interval_seconds: 300   # 或 "60x5"
 ```
 
 ## 7. API 对接文档（请求 + 响应）
