@@ -28,11 +28,10 @@ logger = Logger()
 
 SCHEDULER_TAG_PREDICT = "alum_dosing_scheduler_predict"
 SCHEDULER_TAG_OPTIMIZE = "alum_dosing_scheduler_optimize"
-
-TASK_NAMES = ("predict", "optimize")
-FALLBACK_MINUTE_BY_TASK = {
-    "predict": 0,
-    "optimize": 5,
+DEFAULT_TASK_NAMES = ("predict", "optimize")
+TASK_TAG_MAP = {
+    "predict": SCHEDULER_TAG_PREDICT,
+    "optimize": SCHEDULER_TAG_OPTIMIZE,
 }
 
 # 调度器状态
@@ -51,30 +50,89 @@ def _now_str() -> str:
     return datetime.now().strftime(time_format)
 
 
-def _default_frequency(task_name: str) -> Dict[str, int]:
-    return {"type": "hourly", "interval_hours": 1, "minute": FALLBACK_MINUTE_BY_TASK[task_name]}
+def _default_task_names() -> Tuple[str, ...]:
+    return DEFAULT_TASK_NAMES
 
 
-def _default_scheduler_settings() -> Dict[str, Any]:
+def _default_fallback_minute_by_task(task_names: Tuple[str, ...]) -> Dict[str, int]:
+    minute_map = {}
+    for task_name in task_names:
+        if task_name == "predict":
+            minute_map[task_name] = 0
+        elif task_name == "optimize":
+            minute_map[task_name] = 5
+        else:
+            minute_map[task_name] = 0
+    return minute_map
+
+
+def _default_frequency(default_minute: int) -> Dict[str, int]:
+    return {"type": "hourly", "interval_hours": 1, "minute": default_minute}
+
+
+def _default_scheduler_settings(
+    task_names: Tuple[str, ...], fallback_minute_by_task: Dict[str, int]
+) -> Dict[str, Any]:
     return {
         "enabled": True,
         "auto_start": True,
+        "task_names": list(task_names),
+        "fallback_minute_by_task": dict(fallback_minute_by_task),
         "tasks": {
             task_name: {
                 "enabled": True,
-                "frequency": _default_frequency(task_name),
+                "frequency": _default_frequency(fallback_minute_by_task.get(task_name, 0)),
             }
-            for task_name in TASK_NAMES
+            for task_name in task_names
         },
     }
 
 
+def _sanitize_task_names(raw_task_names: Any) -> Tuple[str, ...]:
+    if not isinstance(raw_task_names, list):
+        logger.warning("[Scheduler] task_names 配置非法，使用默认任务列表")
+        return _default_task_names()
+
+    task_names = []
+    for item in raw_task_names:
+        if isinstance(item, str):
+            name = item.strip()
+            if name:
+                task_names.append(name)
+
+    if not task_names:
+        logger.warning("[Scheduler] task_names 为空，使用默认任务列表")
+        return _default_task_names()
+    return tuple(task_names)
+
+
+def _sanitize_fallback_minutes(
+    raw_fallback: Any, task_names: Tuple[str, ...]
+) -> Dict[str, int]:
+    default_map = _default_fallback_minute_by_task(task_names)
+    if not isinstance(raw_fallback, dict):
+        logger.warning("[Scheduler] fallback_minute_by_task 配置非法，使用默认分钟回退")
+        return default_map
+
+    minute_map = dict(default_map)
+    for task_name in task_names:
+        try:
+            minute = int(raw_fallback.get(task_name, minute_map[task_name]))
+        except (TypeError, ValueError):
+            minute = minute_map[task_name]
+        if minute < 0 or minute > 59:
+            logger.warning(f"[Scheduler:{task_name}] fallback minute 超出范围，使用默认值")
+            minute = default_map[task_name]
+        minute_map[task_name] = minute
+    return minute_map
+
+
 def _sanitize_frequency(
     raw_frequency: Any,
-    task_name: str,
     warn_prefix: str,
+    default_minute: int,
 ) -> Dict[str, int]:
-    frequency = dict(_default_frequency(task_name))
+    frequency = dict(_default_frequency(default_minute))
     if not isinstance(raw_frequency, dict):
         logger.warning(f"{warn_prefix} frequency 配置非法，回退默认")
         return frequency
@@ -103,10 +161,13 @@ def _sanitize_frequency(
     return {"type": "hourly", "interval_hours": interval_hours, "minute": minute}
 
 
-def _sanitize_task_settings(task_name: str, raw_task: Any) -> Dict[str, Any]:
+def _sanitize_task_settings(
+    task_name: str, raw_task: Any, fallback_minute_by_task: Dict[str, int]
+) -> Dict[str, Any]:
+    default_minute = fallback_minute_by_task.get(task_name, 0)
     task_settings = {
         "enabled": True,
-        "frequency": _default_frequency(task_name),
+        "frequency": _default_frequency(default_minute),
     }
     if not isinstance(raw_task, dict):
         logger.warning(f"[Scheduler:{task_name}] task 配置非法，使用默认")
@@ -115,18 +176,28 @@ def _sanitize_task_settings(task_name: str, raw_task: Any) -> Dict[str, Any]:
     task_settings["enabled"] = bool(raw_task.get("enabled", task_settings["enabled"]))
     task_settings["frequency"] = _sanitize_frequency(
         raw_task.get("frequency", task_settings["frequency"]),
-        task_name,
         f"[Scheduler:{task_name}]",
+        default_minute,
     )
     return task_settings
 
 
 def _sanitize_scheduler_settings(raw_scheduler: Any) -> Dict[str, Any]:
-    settings = _default_scheduler_settings()
+    task_names = _default_task_names()
+    fallback_minute_by_task = _default_fallback_minute_by_task(task_names)
+    settings = _default_scheduler_settings(task_names, fallback_minute_by_task)
     if not isinstance(raw_scheduler, dict):
         logger.warning("[Scheduler] 配置类型非法，使用默认配置")
         return settings
 
+    settings["enabled"] = bool(raw_scheduler.get("enabled", settings["enabled"]))
+    settings["auto_start"] = bool(raw_scheduler.get("auto_start", settings["auto_start"]))
+    task_names = _sanitize_task_names(raw_scheduler.get("task_names", list(task_names)))
+    fallback_minute_by_task = _sanitize_fallback_minutes(
+        raw_scheduler.get("fallback_minute_by_task", fallback_minute_by_task),
+        task_names,
+    )
+    settings = _default_scheduler_settings(task_names, fallback_minute_by_task)
     settings["enabled"] = bool(raw_scheduler.get("enabled", settings["enabled"]))
     settings["auto_start"] = bool(raw_scheduler.get("auto_start", settings["auto_start"]))
 
@@ -135,8 +206,10 @@ def _sanitize_scheduler_settings(raw_scheduler: Any) -> Dict[str, Any]:
         logger.warning("[Scheduler] 缺少 tasks 配置，使用默认任务配置")
         return settings
 
-    for task_name in TASK_NAMES:
-        settings["tasks"][task_name] = _sanitize_task_settings(task_name, raw_tasks.get(task_name))
+    for task_name in task_names:
+        settings["tasks"][task_name] = _sanitize_task_settings(
+            task_name, raw_tasks.get(task_name), fallback_minute_by_task
+        )
 
     return settings
 
@@ -163,25 +236,35 @@ def _register_scheduler_jobs() -> None:
     schedule.clear(SCHEDULER_TAG_PREDICT)
     schedule.clear(SCHEDULER_TAG_OPTIMIZE)
 
-    tasks = scheduler_settings["tasks"]
-    if tasks["predict"]["enabled"]:
-        _register_task_job(
-            SCHEDULER_TAG_PREDICT, 
-            "predict", 
-            tasks["predict"]["frequency"], 
-            scheduled_predict_job
-        )
+    tasks = scheduler_settings.get("tasks", {})
+    task_names = scheduler_settings.get("task_names", list(DEFAULT_TASK_NAMES))
+    job_func_by_task = {
+        "predict": scheduled_predict_job,
+        "optimize": scheduled_optimization_job,
+    }
 
-    if tasks["optimize"]["enabled"]:
-        _register_task_job(
-            SCHEDULER_TAG_OPTIMIZE,
-            "optimize",
-            tasks["optimize"]["frequency"],
-            scheduled_optimization_job,
-        )
+    enabled_count = 0
+    for task_name in task_names:
+        task_cfg = tasks.get(task_name, {})
+        if not bool(task_cfg.get("enabled", True)):
+            continue
 
-    if not tasks["predict"]["enabled"] and not tasks["optimize"]["enabled"]:
-        logger.warning("[调度器] 所有任务均被禁用")
+        tag = TASK_TAG_MAP.get(task_name)
+        job_func = job_func_by_task.get(task_name)
+        if not tag or not job_func:
+            logger.warning(f"[调度器] 未识别任务 {task_name}，跳过注册")
+            continue
+
+        _register_task_job(
+            tag,
+            task_name,
+            task_cfg.get("frequency", _default_frequency(0)),
+            job_func,
+        )
+        enabled_count += 1
+
+    if enabled_count == 0:
+        logger.warning("[调度器] 所有任务均被禁用或未识别")
 
 
 def _get_next_run_at(tag: str) -> Optional[str]:
@@ -201,6 +284,14 @@ def _save_latest_result(task_name: str, payload: Dict[str, Any]) -> None:
             latest_predict_result = payload
         elif task_name == "optimize":
             latest_optimize_result = payload
+
+
+def _get_latest_result_by_task(task_name: str) -> Optional[Dict[str, Any]]:
+    if task_name == "predict":
+        return latest_predict_result
+    if task_name == "optimize":
+        return latest_optimize_result
+    return None
 
 
 def scheduled_predict_job():
@@ -379,7 +470,7 @@ def stop_scheduler() -> Tuple[bool, str]:
     return True, "stopped"
 
 
-def run_flask_app_non_blocking(host: str = "0.0.0.0", port: int = 5002):
+def run_flask_app_non_blocking(host: str = "0.0.0.0", port: int = 5001):
     def flask_thread_func():
         app.run(host=host, port=port, debug=False, use_reloader=False)
 
@@ -393,33 +484,26 @@ def run_flask_app_non_blocking(host: str = "0.0.0.0", port: int = 5002):
 def scheduler_status_api():
     with state_lock:
         running = scheduler_running
+        task_names = scheduler_settings.get("task_names", list(DEFAULT_TASK_NAMES))
         tasks_cfg = scheduler_settings.get("tasks", {})
 
+    tasks_status = {}
     with result_lock:
-        predict_latest = latest_predict_result
-        optimize_latest = latest_optimize_result
-
-    predict_status = {
-        "enabled": bool(tasks_cfg.get("predict", {}).get("enabled", True)),
-        "next_run_at": _get_next_run_at(SCHEDULER_TAG_PREDICT),
-        "has_latest_result": predict_latest is not None,
-        "last_executed_at": predict_latest.get("executed_at") if predict_latest else None,
-    }
-    optimize_status = {
-        "enabled": bool(tasks_cfg.get("optimize", {}).get("enabled", True)),
-        "next_run_at": _get_next_run_at(SCHEDULER_TAG_OPTIMIZE),
-        "has_latest_result": optimize_latest is not None,
-        "last_executed_at": optimize_latest.get("executed_at") if optimize_latest else None,
-    }
+        for task_name in task_names:
+            latest = _get_latest_result_by_task(task_name)
+            tag = TASK_TAG_MAP.get(task_name)
+            tasks_status[task_name] = {
+                "enabled": bool(tasks_cfg.get(task_name, {}).get("enabled", True)),
+                "next_run_at": _get_next_run_at(tag) if tag else None,
+                "has_latest_result": latest is not None,
+                "last_executed_at": latest.get("executed_at") if latest else None,
+            }
 
     return ok_response(
         data={
             "scheduler": {
                 "running": running,
-                "tasks": {
-                    "predict": predict_status,
-                    "optimize": optimize_status,
-                },
+                "tasks": tasks_status,
             }
         }
     )
