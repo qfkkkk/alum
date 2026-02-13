@@ -19,7 +19,7 @@ dataio:
 说明：
 - `mode: local` 表示读数据用本地假数据，写结果只打印日志，不走远程库。
 
-### 1.2 调度器（本地建议秒级）
+### 1.2 调度器（整点对齐每 5 分钟）
 
 ```yaml
 scheduler:
@@ -29,25 +29,28 @@ scheduler:
     - predict
     - optimize
   fallback_minute_by_task:
-    predict: 0
+    predict: 5
     optimize: 5
   tasks:
     predict:
       enabled: true
       frequency:
-        type: seconds
-        interval_seconds: 300
+        type: hourly
+        interval_hours: 1
+        minute: 5
+        minute_step: 5
     optimize:
       enabled: true
       frequency:
-        type: seconds
-        interval_seconds: 300
+        type: hourly
+        interval_hours: 1
+        minute: 5
+        minute_step: 5
 ```
 
 说明：
-- 这里按“部署每 5 分钟一次”示例配置：`300` 秒（`60x5`）。
-- `interval_seconds` 也支持写字符串表达式：`"60x5"` 或 `"60*5"`。
-- 如果要切回小时级，把 `type` 改为 `hourly`，并配置 `interval_hours` + `minute`。
+- 上述配置会在每小时的 `:05/:10/:15/.../:55` 触发。
+- 该模式与服务启动时间无关，按整点分钟对齐。
 
 ## 2. 启动命令
 
@@ -80,17 +83,13 @@ python -m services.run_dosing_service status
 ### 3.1 预测器接口
 
 ```bash
-curl -X POST "http://127.0.0.1:5001/alum_dosing/predict" \
-  -H "Content-Type: application/json" \
-  -d '{}'
+curl -X GET "http://127.0.0.1:5001/alum_dosing/predict"
 ```
 
 ### 3.2 优化器接口
 
 ```bash
-curl -X POST "http://127.0.0.1:5001/alum_dosing/optimize" \
-  -H "Content-Type: application/json" \
-  -d '{}'
+curl -X GET "http://127.0.0.1:5001/alum_dosing/optimize"
 ```
 
 ## 4. 常用状态接口
@@ -108,7 +107,7 @@ curl "http://127.0.0.1:5001/alum_dosing/latest_result"
 ## 5. 快速排查
 
 - `predict/optimize` 请求报错：先看服务是否启动、端口是否 `5001`。
-- 定时任务没触发：确认 `scheduler.enabled=true`、任务 `enabled=true`、`frequency.type=seconds`。
+- 定时任务没触发：确认 `scheduler.enabled=true`、任务 `enabled=true`、`frequency.type=hourly`、`minute=5`、`minute_step=5`。
 - 本地模式没有写库：这是预期行为，`mode: local` 只打印结果日志。
 
 ## 6. 远程部署时需要修改哪些 YAML
@@ -133,7 +132,7 @@ dataio:
 - `write_model_name_optimize`：优化结果写入的模型名。
 - `write_model_name_predict`：预测结果写入的模型名。
 
-调度频率按“每 5 分钟一次”示例（推荐）：
+调度频率按“每小时每 5 分钟一次（整点对齐）”示例（推荐）：
 
 ```yaml
 scheduler:
@@ -143,19 +142,23 @@ scheduler:
     - predict
     - optimize
   fallback_minute_by_task:
-    predict: 0
+    predict: 5
     optimize: 5
   tasks:
     predict:
       enabled: true
       frequency:
-        type: seconds
-        interval_seconds: 300   # 或 "60x5"
+        type: hourly
+        interval_hours: 1
+        minute: 5
+        minute_step: 5
     optimize:
       enabled: true
       frequency:
-        type: seconds
-        interval_seconds: 300   # 或 "60x5"
+        type: hourly
+        interval_hours: 1
+        minute: 5
+        minute_step: 5
 ```
 
 ## 7. API 对接文档（请求 + 响应）
@@ -223,9 +226,20 @@ curl -X GET "http://127.0.0.1:5001/alum_dosing/health"
 请求：
 
 ```bash
+# GET：内部读取实时数据后预测
+curl -X GET "http://127.0.0.1:5001/alum_dosing/predict"
+```
+
+```bash
+# POST：接收外部输入数据后预测
 curl -X POST "http://127.0.0.1:5001/alum_dosing/predict" \
   -H "Content-Type: application/json" \
-  -d '{}'
+  -d '{
+    "last_dt": "2026-02-13 12:00:00",
+    "data_dict": {
+      "pool_1": [[1.0, 2.0], [3.0, 4.0]]
+    }
+  }'
 ```
 
 成功响应示例：
@@ -260,9 +274,29 @@ curl -X POST "http://127.0.0.1:5001/alum_dosing/predict" \
 请求：
 
 ```bash
+# GET：内部读取实时数据，执行“预测+优化”全流程
+curl -X GET "http://127.0.0.1:5001/alum_dosing/optimize"
+```
+
+```bash
+# POST：接收预测结果 + 当前特征，仅执行优化
 curl -X POST "http://127.0.0.1:5001/alum_dosing/optimize" \
   -H "Content-Type: application/json" \
-  -d '{}'
+  -d '{
+    "predictions": {
+      "pool_1": {
+        "2026-02-13 12:05:00": 1.11,
+        "2026-02-13 12:10:00": 1.15
+      }
+    },
+    "current_features": {
+      "pool_1": {
+        "current_dose": 10.0,
+        "ph": 7.1,
+        "flow": 1200
+      }
+    }
+  }'
 ```
 
 成功响应示例：

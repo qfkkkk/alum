@@ -37,14 +37,48 @@ class TestDosingSchedulerIntegration(unittest.TestCase):
         dosing_scheduler.schedule.clear(dosing_scheduler.SCHEDULER_TAG_PREDICT)
         dosing_scheduler.schedule.clear(dosing_scheduler.SCHEDULER_TAG_OPTIMIZE)
 
-    def test_seconds_expression_frequency_parse(self):
+    def test_seconds_frequency_parse(self):
+        freq = dosing_scheduler._sanitize_frequency(
+            {"type": "seconds", "interval_seconds": "300"},
+            "[Scheduler:predict]",
+            0,
+        )
+        self.assertEqual(freq["type"], "seconds")
+        self.assertEqual(freq["interval_seconds"], 300)
+
+    def test_seconds_expression_frequency_fallback(self):
         freq = dosing_scheduler._sanitize_frequency(
             {"type": "seconds", "interval_seconds": "60x5"},
             "[Scheduler:predict]",
             0,
         )
         self.assertEqual(freq["type"], "seconds")
-        self.assertEqual(freq["interval_seconds"], 300)
+        self.assertEqual(freq["interval_seconds"], 10)
+
+    def test_hourly_minute_step_frequency_parse(self):
+        freq = dosing_scheduler._sanitize_frequency(
+            {"type": "hourly", "interval_hours": 1, "minute": 5, "minute_step": 5},
+            "[Scheduler:predict]",
+            0,
+        )
+        self.assertEqual(freq["type"], "hourly")
+        self.assertEqual(freq["interval_hours"], 1)
+        self.assertEqual(freq["minute"], 5)
+        self.assertEqual(freq["minute_step"], 5)
+
+    def test_register_hourly_minute_step_jobs(self):
+        def _noop():
+            return None
+
+        dosing_scheduler._register_task_job(
+            dosing_scheduler.SCHEDULER_TAG_PREDICT,
+            "predict",
+            {"type": "hourly", "interval_hours": 1, "minute": 5, "minute_step": 5},
+            _noop,
+        )
+        jobs = dosing_scheduler.schedule.get_jobs(dosing_scheduler.SCHEDULER_TAG_PREDICT)
+        # 05/10/15/.../55，共 11 个触发点
+        self.assertEqual(len(jobs), 11)
 
     def test_predict_job_integration(self):
         dosing_scheduler.scheduled_predict_job()

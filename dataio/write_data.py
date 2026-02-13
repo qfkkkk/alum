@@ -1,7 +1,6 @@
 import sys
 from pathlib import Path
-import json
-from typing import Dict
+from typing import Any, Dict
 
 try:
     from .data_factory import upload_recommend_message
@@ -13,22 +12,25 @@ except ImportError:
     from dataio.data_factory import upload_recommend_message
 
 
-def write_data(model_name:str, result: Dict[str, Dict[str, float]], mode: str = 'remote') -> Dict[str, object]:  # result格式: {"pool_id": {datetime: x}}
+def write_data(model_name:str, result: Any, mode: str = 'remote') -> Dict[str, object]:
     """
     写入推荐投加量数据
     
     :param model_name: 模型名称，可选值：
                       - 'optimized_dose': 投加药耗优化模型
                       - 'effluent_turbidity': 沉淀池出水浊度预测模型
-    :param result: 模型输出结果，格式为：{"pool_id": {datetime: x}}
+    :param result: 模型输出结果，支持 dict 或 str。
+                  dict 格式示例：{"pool_id": {datetime: x}}
                   其中 pool_id 为池子ID，datetime 为时间戳，x 为预测值
     :param mode: 数据模式，'remote' 或 'local'
     :return: Dict，包含写入状态
     """
     mode_norm = str(mode or 'remote').strip().lower()
+    result_str = str(result)
+
     if mode_norm == 'local':
         print("[write_data][local] model_name={}, payload={}".format(
-            model_name, json.dumps(result, ensure_ascii=False)
+            model_name, result_str
         ))
         return {"success": True, "skipped": True, "mode": "local", "model_name": model_name}
 
@@ -36,7 +38,7 @@ def write_data(model_name:str, result: Dict[str, Dict[str, float]], mode: str = 
         upload_recommend_message(
             {
                 "ALUM_DOSING_ALG_OUTPUT": {
-                    "ALUM_DOSING_ALG_MODEL": '{}'.format(result)
+                    "ALUM_DOSING_ALG_MODEL": result_str
                 }
             }
         )
@@ -44,7 +46,7 @@ def write_data(model_name:str, result: Dict[str, Dict[str, float]], mode: str = 
         upload_recommend_message(
             {
                 "ALUM_DOSING_ALG_OUTPUT": {
-                    "EFFLUENT_TURBIDITY_FORECAST_MODEL": '{}'.format(result)
+                    "EFFLUENT_TURBIDITY_FORECAST_MODEL": result_str
                 }
             }
         )
