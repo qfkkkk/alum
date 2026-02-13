@@ -1,6 +1,4 @@
-*.pt
 *.csv
-*.pkl
 __pycache__/
 *.py[cod]
 *.so
@@ -43,4 +41,4 @@ data/
 .ipynb_checkpoints/
 
 # models
-checkpoints/
+# checkpoints/
