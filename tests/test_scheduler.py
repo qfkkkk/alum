@@ -85,9 +85,27 @@ class TestDosingSchedulerIntegration(unittest.TestCase):
         self.assertTrue(scheduler_data["running"])
         self.assertIn("predict", scheduler_data["tasks"])
         self.assertIn("optimize", scheduler_data["tasks"])
+        self.assertIn("enabled", scheduler_data["tasks"]["predict"])
+        self.assertIn("next_run_at", scheduler_data["tasks"]["predict"])
+        self.assertIn("has_latest_result", scheduler_data["tasks"]["predict"])
+        self.assertIn("last_executed_at", scheduler_data["tasks"]["predict"])
+        self.assertIn("enabled", scheduler_data["tasks"]["optimize"])
+        self.assertIn("next_run_at", scheduler_data["tasks"]["optimize"])
+        self.assertIn("has_latest_result", scheduler_data["tasks"]["optimize"])
+        self.assertIn("last_executed_at", scheduler_data["tasks"]["optimize"])
+        self.assertFalse(scheduler_data["tasks"]["predict"]["has_latest_result"])
+        self.assertFalse(scheduler_data["tasks"]["optimize"]["has_latest_result"])
 
         dosing_scheduler.scheduled_predict_job()
         dosing_scheduler.scheduled_optimization_job()
+
+        status_resp_2 = self.client.get("/alum_dosing/scheduler/status")
+        status_data_2 = json.loads(status_resp_2.data)
+        scheduler_data_2 = status_data_2["data"]["scheduler"]
+        self.assertTrue(scheduler_data_2["tasks"]["predict"]["has_latest_result"])
+        self.assertTrue(scheduler_data_2["tasks"]["optimize"]["has_latest_result"])
+        self.assertIsNotNone(scheduler_data_2["tasks"]["predict"]["last_executed_at"])
+        self.assertIsNotNone(scheduler_data_2["tasks"]["optimize"]["last_executed_at"])
 
         latest_resp = self.client.get("/alum_dosing/latest_result")
         latest_data = json.loads(latest_resp.data)
