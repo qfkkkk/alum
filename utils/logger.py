@@ -6,11 +6,7 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from typing import Type
 
-<<<<<<< HEAD
 default_logger = "alum_dosing_optimizer"
-=======
-default_logger = "chuxiong_tobacco_optimization"
->>>>>>> 27c44f72355ad8313bcb84c90643aa604b1273ed
 log_dir = "./log"
 
 
