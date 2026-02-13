@@ -1,0 +1,60 @@
+# 包含以下模型
+model_name:
+  turbidity_predictor: 沉淀池出水浊度预测模型
+  dosing_optimizer: 投加药耗优化模型
+
+# 投矾系统时序数据各模型点位表时序数据（历史数据，60个时间步长）
+input_point:
+  # 沉淀池出水浊度预测模型
+  effluent_turbidity:
+    FTJZ: 
+      WQ_Data_0__Value_fb: turb_jinshui_1 #1_反应池浊度
+      WQ_Data_3__Value_fb: turb_jinshui_2 #2_反应池浊度
+      WQ_Data_6__Value_fb: turb_jinshui_3 #3_反应池浊度
+      WQ_Data_9__Value_fb: turb_jinshui_4 #4_反应池浊度
+      WQ_Data_1__Value_fb: pH_1 #1_反应池PH
+      WQ_Data_4__Value_fb: pH_2 #2_反应池PH
+      WQ_Data_7__Value_fb: pH_3 #3_反应池PH
+      WQ_Data_10__Value_fb: pH_4 #4_反应池PH
+      Flow_water_1_: flow_1 #1#沉淀池进水瞬时流量
+      Flow_water_2_: flow_2
+      Flow_water_3_: flow_3
+      Flow_water_4_: flow_4
+      WQ_Data_12__Value_fb: turb_chushui_1   # 1_沉淀池出水浊度
+      WQ_Data_16__Value_fb: turb_chushui_2
+      WQ_Data_20__Value_fb: turb_chushui_3
+      WQ_Data_24__Value_fb: turb_chushui_4
+      Flow_1__yaohao: dose_1 #1_投加流量计—药耗
+      Flow_2__yaohao: dose_2 #2_投加流量计—药耗
+      Flow_3__yaohao: dose_3 #3_投加流量计—药耗
+      Flow_4__yaohao: dose_4 #4_投加流量计—药耗
+    YSQC_zz:
+      water_temperature_1: temp_shuimian #水面水温
+
+
+  # 投加药耗优化模型，实时数据，当前时刻（从上述历史数据中获取也剋）
+  optimized_dose:
+    FTJZ: 
+      WQ_Data_0__Value_fb: turb_jinshui_1 #1_反应池浊度
+      WQ_Data_3__Value_fb: turb_jinshui_2 #2_反应池浊度
+      WQ_Data_6__Value_fb: turb_jinshui_3 #3_反应池浊度
+      WQ_Data_9__Value_fb: turb_jinshui_4 #4_反应池浊度
+      WQ_Data_1__Value_fb: pH_1 #1_反应池PH
+      WQ_Data_4__Value_fb: pH_2 #2_反应池PH
+      WQ_Data_7__Value_fb: pH_3 #3_反应池PH
+      WQ_Data_10__Value_fb: pH_4 #4_反应池PH
+      Flow_water_1_: flow_1 #1#沉淀池进水瞬时流量
+      Flow_water_2_: flow_2
+      Flow_water_3_: flow_3
+      Flow_water_4_: flow_4
+      WQ_Data_12__Value_fb: turb_chushui_1   # 1_沉淀池出水浊度
+      WQ_Data_16__Value_fb: turb_chushui_2
+      WQ_Data_20__Value_fb: turb_chushui_3
+      WQ_Data_24__Value_fb: turb_chushui_4
+      Flow_1__yaohao: dose_1 #1_投加流量计—药耗
+      Flow_2__yaohao: dose_2 #2_投加流量计—药耗
+      Flow_3__yaohao: dose_3 #3_投加流量计—药耗
+      Flow_4__yaohao: dose_4 #4_投加流量计—药耗
+    YSQC_zz:
+      water_temperature_1: temp_shuimian #水面水温
+    

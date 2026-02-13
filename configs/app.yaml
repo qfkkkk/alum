@@ -1,0 +1,107 @@
+# 预测器配置
+# 用于 TurbidityPredictor 和 TurbidityPredictorManager
+
+# 模型架构
+model_arch: "xPatch"
+checkpoint_base_dir: "checkpoints"
+device: "auto"  # auto / cpu / cuda
+
+# 步长配置
+seq_len: 60          # 输入步长（历史数据点数）
+pred_len: 6          # 输出步长（预测未来点数）
+time_interval_minutes: 5  # 数据采样间隔（分钟）
+
+# 特征配置
+features:
+  - dose
+  - turb_chushui
+  - turb_jinshui
+  - flow
+  - pH
+  - temp_shuimian
+target_feature: "turb_chushui"
+target_feature_idx: 1  # turb_chushui 在 features 列表中的索引
+# 池子配置
+pools:
+  pool_1:
+    enabled: true
+  pool_2:
+    enabled: true
+  pool_3:
+    enabled: true
+  pool_4:
+    enabled: true
+
+
+# 预测时域、控制时域
+prediction_horizon: 6        # Np: 预测时域（步数），每步5分钟
+control_horizon: 5           # Nc: 控制时域（步数），每步5分钟
+time_step: 5
+
+# 沉淀池出厂水浊度目标
+target_turbidity: 1
+
+# 惩罚项权重
+lambda_du: 0.005             # λ: 控制变化量的权重系数
+
+# 约束条件
+constraints:
+  dose_min: 0                # 投矾量下限 (mg/L)
+  dose_max: 70               # 投矾量上限 (mg/L)
+  dose_rate_limit: 5.0       # 单步投矾变化量上限 (mg/L)
+
+# 优化器配置
+optimizer:
+  type: pso                  # 可选值: pso(粒子群), sa(模拟退火), de(差分进化)
+  max_iterations: 100        # 最大迭代次数
+  population_size: 50        # 种群大小（PSO/DE）
+  tolerance: 1e-6            # 收敛容差
+
+# 各优化器特定超参数
+optimizer_hyperparams:
+  pso:
+    w: 0.7                   # 惯性权重
+    c1: 1.5                  # 个体学习因子
+    c2: 1.5                  # 社会学习因子
+  sa:
+    temp_init: 100.0         # 初始温度
+    temp_min: 1e-3           # 最小温度
+    alpha: 0.95              # 降温系数
+  de:
+    f: 0.8                   # 缩放因子
+    cr: 0.9                  # 交叉概率
+
+# 调度器配置
+scheduler:
+  enabled: true              # 是否启用调度器总开关（false 时不注册任何任务）
+  auto_start: true           # 服务启动时是否自动启动调度器
+  task_names:                # 需要注册的任务列表（按顺序处理）
+    - predict                # 预测任务：仅执行预测器
+    - optimize               # 优化任务：执行“预测 -> 优化”
+  fallback_minute_by_task:   # 小时级调度下，各任务 minute 缺省回退值
+    predict: 5               # predict 未配置 minute 时，默认每小时第 5 分钟
+    optimize: 5              # optimize 未配置 minute 时，默认每小时第 5 分钟
+  tasks:
+    predict:
+      enabled: true          # 是否启用 predict 任务
+      frequency:
+        type: hourly         # 调度类型：hourly（小时级）/ seconds（秒级联调用）
+        interval_hours: 1    # 每 1 小时执行一次
+        minute: 5            # 起始分钟（如 10:05）
+        minute_step: 5       # 每小时按 5 分钟网格触发：05/10/15.../55
+    optimize:
+      enabled: true          # 是否启用 optimize 任务
+      frequency:
+        type: hourly         # 调度类型：hourly（小时级）/ seconds（秒级联调用）
+        interval_hours: 1    # 每 1 小时执行一次
+        minute: 5            # 起始分钟（如 10:05）
+        minute_step: 5       # 每小时按 5 分钟网格触发：05/10/15.../55
+
+# 数据 IO 配置
+dataio:
+  mode: local                # local / remote
+  debug: false
+  local_seed: 42
+  read_model_name: optimized_dose
+  write_model_name: optimized_dose
+  remote_config_file: configs/alum_dosing.yaml
