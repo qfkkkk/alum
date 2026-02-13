@@ -88,3 +88,12 @@ scheduler:
         type: hourly
         interval_hours: 1
         minute: 5
+
+# 数据 IO 配置
+dataio:
+  mode: local                # local / remote
+  debug: false
+  local_seed: 42
+  read_model_name: optimized_dose
+  write_model_name: optimized_dose
+  remote_config_file: configs/alum_dosing.yaml
