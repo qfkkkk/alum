@@ -83,13 +83,18 @@ python -m services.run_dosing_service status
 ### 3.1 预测器接口
 
 ```bash
-curl -X GET "http://127.0.0.1:5001/alum_dosing/predict"
+curl -X POST "http://127.0.0.1:5001/alum_dosing/predict" \
+  -H "Content-Type: application/json" \
+  -d '{"mode":"online"}'
 ```
 
 ### 3.2 优化器接口
 
 ```bash
-curl -X GET "http://127.0.0.1:5001/alum_dosing/optimize"
+# POST：mode=online，内部读取实时数据并执行全流程
+curl -X POST "http://127.0.0.1:5001/alum_dosing/optimize" \
+  -H "Content-Type: application/json" \
+  -d '{"mode":"online"}'
 ```
 
 ## 4. 常用状态接口
@@ -224,22 +229,26 @@ curl -X GET "http://127.0.0.1:5001/alum_dosing/health"
 ### 7.2 预测接口
 
 请求：
+`mode` 为必填字段。
 
 ```bash
-# GET：内部读取实时数据后预测
-curl -X GET "http://127.0.0.1:5001/alum_dosing/predict"
-```
-
-```bash
-# POST：接收外部输入数据后预测
+# POST：mode=external，接收外部输入数据后预测
 curl -X POST "http://127.0.0.1:5001/alum_dosing/predict" \
   -H "Content-Type: application/json" \
   -d '{
+    "mode": "external",
     "last_dt": "2026-02-13 12:00:00",
     "data_dict": {
       "pool_1": [[1.0, 2.0], [3.0, 4.0]]
     }
   }'
+```
+
+```bash
+# POST：mode=online 时，忽略外部 data，内部读取实时数据
+curl -X POST "http://127.0.0.1:5001/alum_dosing/predict" \
+  -H "Content-Type: application/json" \
+  -d '{"mode":"online"}'
 ```
 
 成功响应示例：
@@ -272,17 +281,14 @@ curl -X POST "http://127.0.0.1:5001/alum_dosing/predict" \
 ### 7.3 优化接口
 
 请求：
+`mode` 为必填字段。
 
 ```bash
-# GET：内部读取实时数据，执行“预测+优化”全流程
-curl -X GET "http://127.0.0.1:5001/alum_dosing/optimize"
-```
-
-```bash
-# POST：接收预测结果 + 当前特征，仅执行优化
+# POST：mode=external，接收预测结果 + 当前特征，仅执行优化（不再做预测）
 curl -X POST "http://127.0.0.1:5001/alum_dosing/optimize" \
   -H "Content-Type: application/json" \
   -d '{
+    "mode": "external",
     "predictions": {
       "pool_1": {
         "2026-02-13 12:05:00": 1.11,
@@ -297,6 +303,13 @@ curl -X POST "http://127.0.0.1:5001/alum_dosing/optimize" \
       }
     }
   }'
+```
+
+```bash
+# POST：mode=online，内部读取实时数据并执行“预测+优化”全流程
+curl -X POST "http://127.0.0.1:5001/alum_dosing/optimize" \
+  -H "Content-Type: application/json" \
+  -d '{"mode":"online"}'
 ```
 
 成功响应示例：
