@@ -176,8 +176,8 @@ def _apply_predict_patches(
     interval_minutes = int(config.get("time_interval_minutes", 5))
     aligned_last_dt = _align_datetime_to_interval(last_dt, interval_minutes)
     window_index = _build_window_index(aligned_last_dt, seq_len, interval_minutes)
-    window_start = min(window_index.keys())
-    window_end = max(window_index.keys())
+    window_start = (aligned_last_dt - timedelta(minutes=interval_minutes * (seq_len - 1))).strftime(time_format)
+    window_end = aligned_last_dt.strftime(time_format)
 
     patched_data = {}
     for pool_id, values in (baseline_data or {}).items():
