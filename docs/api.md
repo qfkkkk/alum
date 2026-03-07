@@ -52,7 +52,10 @@ curl -X GET "http://127.0.0.1:5001/alum_dosing/health"
 必填：`mode`
 
 - `mode=online`：内部读取实时数据
-- `mode=external/agent/multisim/mulitsim`：使用外部输入数据
+- `mode=external/agent/multisim/mulitsim`：先读取实时基线，再按 `patches` 做局部覆盖
+- `patches[].datetime` 必须使用秒级精准时间（`YYYY-mm-dd HH:MM:SS`）并精确命中窗口点，不支持就近匹配
+- 窗口时间点按 `time_interval_minutes` 向下对齐到固定网格（默认 5 分钟），秒固定为 `00`
+- 常见错误码：`PREDICT_PATCH_DATETIME_OUT_OF_WINDOW`（时间不在窗口）、`PREDICT_PATCH_DATETIME_FORMAT_INVALID`（时间格式不对）、`PREDICT_PATCH_FEATURE_NOT_FOUND`（特征名不匹配）
 
 ### online 示例
 
@@ -69,9 +72,22 @@ curl -X POST "http://127.0.0.1:5001/alum_dosing/predict" \
   -H "Content-Type: application/json" \
   -d '{
     "mode": "external",
-    "last_dt": "2026-02-13 12:00:00",
-    "data_dict": {
-      "pool_1": [[1.0, 2.0], [3.0, 4.0]]
+    "patches": {
+      "pool_1": [
+        {
+          "datetime": "2026-02-13 12:05:00",
+          "features": {
+            "dose": 9.9,
+            "pH": 7.2
+          }
+        },
+        {
+          "datetime": "2026-02-13 12:10:00",
+          "features": {
+            "flow": 1200
+          }
+        }
+      ]
     }
   }'
 ```
@@ -140,4 +156,3 @@ curl -X POST "http://127.0.0.1:5001/alum_dosing/scheduler/stop"
 ```bash
 curl -X GET "http://127.0.0.1:5001/alum_dosing/latest_result"
 ```
-
